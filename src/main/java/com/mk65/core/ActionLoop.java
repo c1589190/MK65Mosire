@@ -196,28 +196,24 @@ public class ActionLoop {
 
     private void processRound(ActionInput input) {
         int round = roundCount.incrementAndGet();
-        log.info("[ActionLoop] ⏰ 第{}轮 — 来源={}, 文本={}",
-                round, input.source(),
-                input.rawText().length() > 60
-                        ? input.rawText().substring(0, 60) + "..."
-                        : input.rawText());
+        MK65Debug.roundStart(round, input.source(), input.rawText());
 
         try {
             // ── 1. 分词 ──
             List<String> inputTokens = tokenizer.segment(input.actionText());
-            log.debug("[ActionLoop] 分词结果: {}", inputTokens);
+            MK65Debug.inputTokens(input.actionText(), inputTokens);
 
             // ── 2. 动机查询 ──
             Map<String, Map<String, Double>> dist = matrix.queryActionDistribution(inputTokens);
             Set<String> novelTokens = matrix.findNovelTokens(inputTokens);
             List<ConflictDetector.ConflictPair> conflicts = ConflictDetector.detectConflicts(dist);
+            Map<String, Double> overallVotes = computeOverallVotes(dist);
+            MK65Debug.motivationQuery(dist, novelTokens, conflicts, overallVotes);
 
-            // ★ 自动经验检索：Jaccard匹配最近500条经验
+            // ★ 自动经验检索
             MemoryManager mem = MemoryManager.getInstance();
             java.util.List<MemoryManager.ExpMatch> autoMemories = mem.autoRecall(inputTokens, 3);
-
-            // 综合投票
-            Map<String, Double> overallVotes = computeOverallVotes(dist);
+            MK65Debug.autoMemories(autoMemories);
 
             boolean hasHistory = !dist.isEmpty() || !autoMemories.isEmpty();
 
@@ -229,14 +225,17 @@ public class ActionLoop {
             ArrayNode toolsArray = buildToolsArray();
 
             // ── 4. 调用 LLM ──
-            log.info("[ActionLoop] 🤖 调用LLM (userMessage={}chars, tools={}, globalMessages={})",
-                    userMessage.length(), toolsArray.size(), llm.getMessageCount());
+            MK65Debug.llmCall(llm.getMessageCount(), userMessage);
+            long llmStart = System.currentTimeMillis();
             LLMResult result = llm.chat(userMessage, toolsArray);
 
             if (result.isError()) {
                 log.error("[ActionLoop] ❌ LLM 返回错误: {}", result.content());
                 return;
             }
+            MK65Debug.llmResponse(System.currentTimeMillis() - llmStart,
+                    result.hasToolCalls() ? result.toolCalls().size() : 0,
+                    result.content());
 
             // ── 5. 执行工具 ──
             List<String> allActionTokens = new ArrayList<>();
@@ -258,7 +257,6 @@ public class ActionLoop {
                             long toolMs = System.currentTimeMillis() - toolStart;
 
                             toolRecords.add("[" + fnName + "]: " + execResult);
-                            // ★ 工具结果回灌到 LLM 全局上下文
                             llm.appendToolResult(tc.id(), fnName, execResult);
 
                             log.info("[ActionLoop]   ✅ {} ({}ms): {}",
@@ -280,22 +278,23 @@ public class ActionLoop {
                     }
                 }
 
-                // 编码行动token
                 allActionTokens.addAll(ProcessEncoder.encode(result.toolCalls()));
-
-                // 也加入工具记录的编码
                 for (String record : toolRecords) {
                     allActionTokens.addAll(ProcessEncoder.encodeTextRecord(record));
                 }
             } else {
-                // LLM 纯文本响应（没有工具调用）
                 log.info("[ActionLoop] LLM 纯文本响应: {}chars", result.content().length());
             }
+            MK65Debug.actionTokens(ProcessEncoder.encode(result.toolCalls()),
+                    toolRecords.stream()
+                            .flatMap(r -> ProcessEncoder.encodeTextRecord(r).stream())
+                            .toList());
 
             // ── 6. 更新共现矩阵 ──
             if (!inputTokens.isEmpty() && !allActionTokens.isEmpty()) {
                 List<String> uniqueInput = inputTokens.stream().distinct().toList();
                 List<String> uniqueAction = allActionTokens.stream().distinct().toList();
+                MK65Debug.coMatrixUpdate(uniqueInput, uniqueAction);
                 matrix.update(uniqueInput, uniqueAction);
             }
 
@@ -304,18 +303,20 @@ public class ActionLoop {
                     ? result.toolCalls().stream().map(ToolCall::name).toList()
                     : List.of();
             String thoughts = result.content() != null ? result.content() : "";
-            mem.record(round, input.actionText(), input.source(),
+            int expId = mem.record(round, input.actionText(), input.source(),
                     thoughts, executedToolNames, toolRecords,
                     inputTokens, allActionTokens);
+            MK65Debug.experienceRecorded(expId, round, executedToolNames, inputTokens, allActionTokens);
 
-            // ── 7. 输出控制台反馈 ──
+            MK65Debug.poolState(actionPool.size(), actionPool.peek() != null
+                    ? actionPool.peek().rawText() : null);
+
             if (!toolRecords.isEmpty()) {
                 log.info("[ActionLoop] 📋 第{}轮工具执行汇总:\n  {}",
                         round, String.join("\n  ", toolRecords));
             }
 
-            log.info("[ActionLoop] ✅ 第{}轮完成 — 输入token={}, 行动token={}, 矩阵轮次={}",
-                    round, inputTokens.size(), allActionTokens.size(), matrix.getCurrentRound());
+            MK65Debug.roundEnd(round, inputTokens.size(), allActionTokens.size(), matrix.getCurrentRound());
 
         } catch (Exception e) {
             log.error("[ActionLoop] ❌ 第{}轮处理异常", round, e);

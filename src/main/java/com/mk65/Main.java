@@ -142,7 +142,7 @@ public class Main {
         // 5. 控制台交互
         log.info("[Main] 控制台已就绪。输入消息后回车，或输入 /quit 退出。");
         System.out.println("\n══════════════ MK65Mosire Console ══════════════");
-        System.out.println("输入消息后回车，或输入 /quit 退出，/stats 查看统计");
+        System.out.println("输入消息后回车 | /quit 退出 | /stats 统计 | /debug 切换调试");
         System.out.println("═════════════════════════════════════════════════\n");
 
         try (Scanner scanner = new Scanner(System.in)) {
@@ -151,10 +151,16 @@ public class Main {
                 String line = scanner.nextLine();
                 if (line.isBlank()) continue;
 
-                if ("/quit".equalsIgnoreCase(line.trim())) {
+                String cmd = line.trim();
+                if ("/quit".equalsIgnoreCase(cmd)) {
                     running = false;
-                } else if ("/stats".equalsIgnoreCase(line.trim())) {
+                } else if ("/stats".equalsIgnoreCase(cmd)) {
                     printStats(loop);
+                } else if ("/debug".equalsIgnoreCase(cmd)) {
+                    boolean on = !com.mk65.core.MK65Debug.isEnabled();
+                    if (on) com.mk65.core.MK65Debug.enable();
+                    else com.mk65.core.MK65Debug.disable();
+                    System.out.println("DEBUG日志: " + (on ? "ON ✓" : "OFF"));
                 } else {
                     loop.getActionPool().pushConsole(line);
                 }
