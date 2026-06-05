@@ -73,15 +73,15 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
     public boolean isConnected() { return connected; }
 
     @Override
-    public void sendGroupMsg(long groupId, String message) {
+    public String sendGroupMsg(long groupId, String message) {
         log.info("[Napcat] 📤 发送群聊 → 群:{} | {}chars", groupId, message.length());
-        httpPost("/send_group_msg", Map.of("group_id", groupId, "message", message));
+        return httpPost("/send_group_msg", Map.of("group_id", groupId, "message", message));
     }
 
     @Override
-    public void sendPrivateMsg(long userId, String message) {
+    public String sendPrivateMsg(long userId, String message) {
         log.info("[Napcat] 📤 发送私聊 → 用户:{} | {}chars", userId, message.length());
-        httpPost("/send_private_msg", Map.of("user_id", userId, "message", message));
+        return httpPost("/send_private_msg", Map.of("user_id", userId, "message", message));
     }
 
     @Override
@@ -181,7 +181,7 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
 
     // ── HTTP 辅助 ──
 
-    private void httpPost(String endpoint, Map<String, Object> params) {
+    private String httpPost(String endpoint, Map<String, Object> params) {
         try {
             String url = httpBase + endpoint;
             ObjectNode body = mapper.createObjectNode();
@@ -201,12 +201,16 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
             }
 
             try (Response resp = httpClient.newCall(reqBuilder.build()).execute()) {
+                String respBody = resp.body() != null ? resp.body().string() : "";
                 if (!resp.isSuccessful()) {
-                    log.warn("[Napcat] HTTP {} → {}", endpoint, resp.code());
+                    log.warn("[Napcat] HTTP {} {} → {}", resp.code(), endpoint,
+                            respBody.length() > 200 ? respBody.substring(0, 200) : respBody);
                 }
+                return respBody;
             }
         } catch (Exception e) {
             log.error("[Napcat] HTTP POST 异常: {}", endpoint, e);
+            return "ERROR: " + e.getMessage();
         }
     }
 

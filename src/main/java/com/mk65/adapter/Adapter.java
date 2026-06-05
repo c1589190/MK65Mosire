@@ -15,11 +15,11 @@ public interface Adapter {
     /** 是否已连接 */
     boolean isConnected();
 
-    /** 发送群聊消息 */
-    void sendGroupMsg(long groupId, String message);
+    /** 发送群聊消息，返回API响应文本 */
+    String sendGroupMsg(long groupId, String message);
 
-    /** 发送私聊消息 */
-    void sendPrivateMsg(long userId, String message);
+    /** 发送私聊消息，返回API响应文本 */
+    String sendPrivateMsg(long userId, String message);
 
     /**
      * 注册消息回调。

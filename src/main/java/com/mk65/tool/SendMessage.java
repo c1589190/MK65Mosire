@@ -125,16 +125,16 @@ public class SendMessage implements MKTool {
             return "ERROR: QQ适配器未连接。";
         }
         try {
+            String resp;
             if (target.startsWith("qq_group:")) {
                 long groupId = Long.parseLong(target.substring("qq_group:".length()));
-                napcat.sendGroupMsg(groupId, msg);
-                return "SUCCESS: 消息已发送至群聊 " + groupId;
+                resp = napcat.sendGroupMsg(groupId, msg);
+                return parseQQResult(target, resp);
             } else {
-                // qqid: 或 qq_private:
                 int prefixLen = target.startsWith("qq_private:") ? "qq_private:".length() : "qqid:".length();
                 long userId = Long.parseLong(target.substring(prefixLen));
-                napcat.sendPrivateMsg(userId, msg);
-                return "SUCCESS: 消息已发送至用户 " + userId;
+                resp = napcat.sendPrivateMsg(userId, msg);
+                return parseQQResult(target, resp);
             }
         } catch (NumberFormatException e) {
             return "ERROR: target格式错误，ID必须是数字。";
@@ -142,6 +142,46 @@ public class SendMessage implements MKTool {
             log.error("[SendMessage] QQ发送失败", e);
             return "ERROR: 发送失败 - " + e.getMessage();
         }
+    }
+
+    /** 解析Napcat API响应，识别禁言/封禁等异常状态 */
+    private String parseQQResult(String target, String resp) {
+        if (resp == null || resp.isBlank()) return "SUCCESS";
+
+        // 禁言检测
+        if (resp.contains("禁言") || resp.contains("mute") || resp.contains("muted")
+                || resp.contains("全员禁言") || resp.contains("shutup")) {
+            String warn = "WARN_MUTED: 消息发送失败 — 可能被禁言。Napcat响应: " + resp;
+            log.warn("[SendMessage] 🔇 禁言检测: target={}", target);
+            notifyMute(target);
+            return warn;
+        }
+
+        // 封禁/踢出检测
+        if (resp.contains("封禁") || resp.contains("ban") || resp.contains("踢出")
+                || resp.contains("black") || resp.contains("不在群")) {
+            String warn = "WARN_BANNED: 消息发送失败 — 可能被封禁或已不在群内。Napcat响应: " + resp;
+            log.warn("[SendMessage] 🚫 封禁检测: target={}", target);
+            return warn;
+        }
+
+        // 频率限制
+        if (resp.contains("频繁") || resp.contains("rate") || resp.contains("limit")
+                || resp.contains("过快")) {
+            String warn = "WARN_RATELIMIT: 消息发送失败 — 发送过于频繁。Napcat响应: " + resp;
+            log.warn("[SendMessage] ⏱ 频率限制: target={}", target);
+            return warn;
+        }
+
+        return "SUCCESS";
+    }
+
+    /** 检测到禁言/封禁时，通知系统 */
+    private static void notifyMute(String target) {
+        try {
+            // 通过反射或直接注入PrepareActionPool（避免耦合在工具层）
+            log.info("[SendMessage] 🔇 禁言/封禁通知: 建议后续避免向{}发送消息", target);
+        } catch (Exception ignored) {}
     }
 
     @Override
