@@ -83,7 +83,7 @@ public class Main {
             chat.historyToolCount=48
 
             # ---------- 消息聚合 ----------
-            msg.aggregateWaitMs=3000
+            msg.aggregateWaitMs=5000
             msg.aggregateCooldownMs=5000
             msg.aggregateMaxMessages=5
             msg.aggregatePrivateMin=1

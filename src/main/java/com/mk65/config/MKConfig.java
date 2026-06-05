@@ -57,7 +57,7 @@ public class MKConfig {
     public static double EQUIVALENT_TOKEN_THRESHOLD = 0.6;      // coMatrix行向量相似度多高视为等价token
 
     // ========== 消息聚合 ==========
-    public static long MSG_AGGREGATE_WAIT_MS = 3000;
+    public static long MSG_AGGREGATE_WAIT_MS = 5000;
     public static long MSG_AGGREGATE_COOLDOWN_MS = 5000;
     public static int MSG_AGGREGATE_MAX_MESSAGES = 5;
     public static int MSG_AGGREGATE_PRIVATE_MIN = 1;
