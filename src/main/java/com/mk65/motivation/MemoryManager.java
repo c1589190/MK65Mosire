@@ -82,7 +82,7 @@ public class MemoryManager {
         if (currentTokens == null || currentTokens.isEmpty()) return List.of();
         Set<String> currentSet = new HashSet<>(currentTokens);
 
-        String sql = "SELECT id, round_number, action_text, source, thoughts, tool_names, tool_results, input_tokens FROM Experiences ORDER BY id DESC LIMIT 500";
+        String sql = "SELECT id, round_number, action_text, source, thoughts, tool_names, tool_results, input_tokens, helpful_count FROM Experiences ORDER BY id DESC LIMIT 500";
 
         List<ExpMatch> matches = new ArrayList<>();
 
@@ -97,6 +97,8 @@ public class MemoryManager {
                 double jaccard = jaccard(currentSet, expSet);
                 if (jaccard <= 0) continue;
 
+                int helpful = rs.getInt("helpful_count");
+
                 matches.add(new ExpMatch(
                         rs.getInt("id"),
                         rs.getInt("round_number"),
@@ -105,7 +107,7 @@ public class MemoryManager {
                         rs.getString("thoughts"),
                         fromJsonArray(rs.getString("tool_names")),
                         fromJsonArray(rs.getString("tool_results")),
-                        jaccard
+                        jaccard * (1.0 + Math.tanh(helpful * 0.5))  // 有帮助的经验加权
                 ));
             }
         } catch (SQLException e) {
@@ -189,6 +191,27 @@ public class MemoryManager {
         Set<String> union = new HashSet<>(a);
         union.addAll(b);
         return union.isEmpty() ? 0 : (double) intersection.size() / union.size();
+    }
+
+    /**
+     * 应用经验打分。LLM 通过 finish_action 评价后调用。
+     * score=1 → helpful_count+1（未来加权更高）
+     * score=-1 → helpful_count-1（未来加权更低）
+     */
+    public void applyScore(int expId, int score) {
+        if (score == 0) return;
+        String sql = "UPDATE Experiences SET helpful_count = helpful_count + ? WHERE id = ?";
+        try (Connection conn = MKDB.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, score);
+            ps.setInt(2, expId);
+            int updated = ps.executeUpdate();
+            if (updated > 0) {
+                log.debug("[MemoryManager] 经验#{} 打分: {:+d}", expId, score);
+            }
+        } catch (SQLException e) {
+            log.warn("[MemoryManager] 经验打分失败 id={}", expId, e);
+        }
     }
 
     private void incrementRecallCount(int expId) {

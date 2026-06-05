@@ -98,7 +98,10 @@ public class ActionLoop {
         registerTool(new com.mk65.tool.WriteFile(workspace));
         registerTool(new com.mk65.tool.Recall());
         registerTool(new com.mk65.tool.CreateTask());
+        registerTool(new com.mk65.tool.FinishAction());
         com.mk65.tool.CreateTask.setActionPool(actionPool);
+        com.mk65.tool.FinishAction.setActionPool(actionPool);
+        com.mk65.tool.FinishAction.setMemoryManager(MemoryManager.getInstance());
         log.info("[ActionLoop] 工具箱已就绪: {} 个工具", toolbox.size());
         toolbox.keySet().forEach(n -> log.info("[ActionLoop]   - {}", n));
     }
@@ -197,6 +200,9 @@ public class ActionLoop {
     private void processRound(ActionInput input) {
         int round = roundCount.incrementAndGet();
         MK65Debug.roundStart(round, input.source(), input.rawText());
+
+        // ★ 重置每轮结算收集器
+        com.mk65.tool.FinishAction.resetRound();
 
         try {
             // ── 1. 分词 ──
@@ -302,11 +308,21 @@ public class ActionLoop {
             List<String> executedToolNames = result.hasToolCalls()
                     ? result.toolCalls().stream().map(ToolCall::name).toList()
                     : List.of();
-            String thoughts = result.content() != null ? result.content() : "";
+            // 优先用 finish_action 的 thoughts，其次用 LLM 原始 content
+            String thoughts = com.mk65.tool.FinishAction.getRoundThoughts();
+            if (thoughts.isBlank()) thoughts = result.content() != null ? result.content() : "";
             int expId = mem.record(round, input.actionText(), input.source(),
                     thoughts, executedToolNames, toolRecords,
                     inputTokens, allActionTokens);
             MK65Debug.experienceRecorded(expId, round, executedToolNames, inputTokens, allActionTokens);
+
+            // finish_action 结算日志
+            var scores = com.mk65.tool.FinishAction.getRoundScores();
+            var nextActions = com.mk65.tool.FinishAction.getRoundNextActions();
+            if (!scores.isEmpty() || !nextActions.isEmpty()) {
+                log.info("[ActionLoop] 🧠 finish_action结算: 经验打分{}条, 后续任务{}个",
+                        scores.size(), nextActions.size());
+            }
 
             MK65Debug.poolState(actionPool.size(), actionPool.peek() != null
                     ? actionPool.peek().rawText() : null);
@@ -364,7 +380,12 @@ public class ActionLoop {
                   "tool_calls": [...]
                 }
 
-                如果没有需要调用的工具，tool_calls 为空数组。
+                ★★★ 每轮必须调用 finish_action 作为最后一个工具 ★★★
+                即使没有任何实质操作，也要调用 finish_action 结算本轮。
+                finish_action 参数：
+                - thoughts: 本轮推理过程（50-300字）
+                - experience_scoring: 对动机报告中【关联历史经验】的评价(1/0/-1)
+                - next_actions: 后续任务列表（至少1项，如"继续监听消息"）
 
                 实是求是。逻辑完备。行动规范。
                 """;

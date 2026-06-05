@@ -98,6 +98,7 @@ public class ProcessEncoder {
         if (lower.contains("write_file")) tokens.add("action:write_file");
         if (lower.contains("recall")) tokens.add("action:recall");
         if (lower.contains("create_task")) tokens.add("action:create_task");
+        if (lower.contains("finish_action")) tokens.add("action:finish_action");
 
         return tokens;
     }
