@@ -162,6 +162,7 @@ public class Main {
                     else com.mk65.core.MK65Debug.disable();
                     System.out.println("DEBUG日志: " + (on ? "ON ✓" : "OFF"));
                 } else {
+                    log.info("[Main] 📨 控制台输入: {}chars", line.length());
                     loop.getActionPool().pushConsole(line);
                 }
             }

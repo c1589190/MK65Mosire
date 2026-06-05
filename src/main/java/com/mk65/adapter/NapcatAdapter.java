@@ -71,11 +71,13 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
 
     @Override
     public void sendGroupMsg(long groupId, String message) {
+        log.info("[Napcat] 📤 发送群聊 → 群:{} | {}chars", groupId, message.length());
         httpPost("/send_group_msg", Map.of("group_id", groupId, "message", message));
     }
 
     @Override
     public void sendPrivateMsg(long userId, String message) {
+        log.info("[Napcat] 📤 发送私聊 → 用户:{} | {}chars", userId, message.length());
         httpPost("/send_private_msg", Map.of("user_id", userId, "message", message));
     }
 
@@ -104,12 +106,19 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
             if (text.isBlank()) return;
 
             String source;
+            String senderName = msg.path("sender").path("nickname").asText("");
+            if (senderName.isBlank()) senderName = String.valueOf(msg.path("sender").path("user_id").asLong());
+
             if ("group".equals(messageType)) {
                 long groupId = msg.path("group_id").asLong();
                 source = "qq_group:" + groupId;
+                log.info("[Napcat] 📨 群聊消息 | 群:{} | 发送者:{} | {}chars",
+                        groupId, senderName, text.length());
             } else if ("private".equals(messageType)) {
                 long userId = msg.path("user_id").asLong();
                 source = "qqid:" + userId;
+                log.info("[Napcat] 📨 私聊消息 | 发送者:{}({}) | {}chars",
+                        senderName, userId, text.length());
             } else {
                 return;
             }

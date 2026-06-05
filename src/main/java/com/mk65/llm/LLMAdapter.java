@@ -109,12 +109,34 @@ public class LLMAdapter {
             body.put("tool_choice", "auto");
         }
 
+        // 计算请求体大小和消息概要
+        String bodyStr = body.toString();
+        int bodyBytes = bodyStr.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+
+        // 每条消息的大小概要
+        StringBuilder msgSizes = new StringBuilder();
+        for (int i = 0; i < globalMessages.size(); i++) {
+            JsonNode m = globalMessages.get(i);
+            String role = m.path("role").asText("");
+            int len = m.path("content").asText("").length();
+            if (len > 0) {
+                msgSizes.append(String.format("%s(%d) ", role, len));
+            } else if (m.has("tool_calls")) {
+                msgSizes.append(String.format("%s(tools×%d) ", role, m.path("tool_calls").size()));
+            }
+        }
+
+        log.info("[LLM] 📤 请求 → {} | model={} | msgs={} | body={}KB | {}",
+                apiBase, model, globalMessages.size(),
+                String.format("%.1f", bodyBytes / 1024.0),
+                msgSizes.toString().trim());
+
         long startMs = System.currentTimeMillis();
 
         try {
             String fullUrl = apiBase + (apiBase.endsWith("/") ? "" : "/") + "chat/completions";
             RequestBody reqBody = RequestBody.create(
-                    MediaType.parse("application/json"), body.toString());
+                    MediaType.parse("application/json"), bodyStr);
             Request.Builder reqBuilder = new Request.Builder()
                     .url(fullUrl)
                     .post(reqBody)
@@ -126,23 +148,25 @@ public class LLMAdapter {
             try (Response resp = client.newCall(reqBuilder.build()).execute()) {
                 long elapsed = System.currentTimeMillis() - startMs;
                 if (!resp.isSuccessful() || resp.body() == null) {
-                    // 请求失败时移除刚才追回的用户消息，避免污染上下文
                     if (!globalMessages.isEmpty() && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
                         globalMessages.remove(globalMessages.size() - 1);
                     }
+                    log.error("[LLM] ❌ HTTP {} ({}ms)", resp.code(), elapsed);
                     return LLMResult.error("HTTP " + resp.code(), elapsed);
                 }
-                String bodyStr = resp.body().string();
-                JsonNode root = mapper.readTree(bodyStr);
+                String respStr = resp.body().string();
+                log.info("[LLM] 📥 响应 {}ms | body={}KB | HTTP {}",
+                        elapsed, String.format("%.1f", respStr.getBytes(java.nio.charset.StandardCharsets.UTF_8).length / 1024.0),
+                        resp.code());
+                JsonNode root = mapper.readTree(respStr);
                 return parseAndCache(root, elapsed);
             }
         } catch (Exception e) {
             long elapsed = System.currentTimeMillis() - startMs;
-            // 同上，清理污染
             if (!globalMessages.isEmpty() && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
                 globalMessages.remove(globalMessages.size() - 1);
             }
-            log.error("[LLM] 调用失败 ({}ms): {}", elapsed, e.getMessage());
+            log.error("[LLM] ❌ 调用失败 ({}ms): {}", elapsed, e.getMessage());
             return LLMResult.error("LLM调用失败: " + e.getMessage(), elapsed);
         }
     }
