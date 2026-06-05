@@ -111,20 +111,34 @@ public class LLMAdapter {
             body.put("tool_choice", "auto");
         }
 
+        // 构建前验证消息序列合法性
+        String seqError = validateMessageSequence();
+        if (seqError != null) {
+            log.error("[LLM] ⚠️ 消息序列非法, 自动重置全局上下文: {}", seqError);
+            globalMessages.clear();
+            ObjectNode sysReset = mapper.createObjectNode();
+            sysReset.put("role", "system");
+            sysReset.put("content", systemPromptText);
+            globalMessages.add(sysReset);
+            globalMessages.add(userMsg);  // userMsg已在前面创建并添加过，现在重新添加
+        }
+
         // 计算请求体大小和消息概要
         String bodyStr = body.toString();
         int bodyBytes = bodyStr.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
 
-        // 每条消息的大小概要
+        // 每条消息的角色顺序
         StringBuilder msgSizes = new StringBuilder();
         for (int i = 0; i < globalMessages.size(); i++) {
             JsonNode m = globalMessages.get(i);
             String role = m.path("role").asText("");
             int len = m.path("content").asText("").length();
             if (len > 0) {
-                msgSizes.append(String.format("%s(%d) ", role, len));
+                msgSizes.append(String.format("[%d]%s(%d) ", i, role, len));
             } else if (m.has("tool_calls")) {
-                msgSizes.append(String.format("%s(tools×%d) ", role, m.path("tool_calls").size()));
+                msgSizes.append(String.format("[%d]%s(tools×%d) ", i, role, m.path("tool_calls").size()));
+            } else {
+                msgSizes.append(String.format("[%d]%s(空) ", i, role));
             }
         }
 
@@ -150,10 +164,17 @@ public class LLMAdapter {
             try (Response resp = client.newCall(reqBuilder.build()).execute()) {
                 long elapsed = System.currentTimeMillis() - startMs;
                 if (!resp.isSuccessful() || resp.body() == null) {
-                    if (!globalMessages.isEmpty() && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
-                        globalMessages.remove(globalMessages.size() - 1);
+                    String errBody = "";
+                    try { if (resp.body() != null) errBody = resp.body().string(); } catch (Exception ignored) {}
+                    log.error("[LLM] ❌ HTTP {} ({}ms) | 响应: {}",
+                            resp.code(), elapsed,
+                            errBody.length() > 500 ? errBody.substring(0, 500) + "..." : errBody);
+
+                    // 400类错误 → 上下文损坏 → 自动重置
+                    if (resp.code() >= 400 && resp.code() < 500) {
+                        log.warn("[LLM] 🔄 自动重置全局上下文 (HTTP {})", resp.code());
+                        clearContext();
                     }
-                    log.error("[LLM] ❌ HTTP {} ({}ms)", resp.code(), elapsed);
                     return LLMResult.error("HTTP " + resp.code(), elapsed);
                 }
                 String respStr = resp.body().string();
@@ -214,6 +235,38 @@ public class LLMAdapter {
 
     public int getMessageCount() {
         return globalMessages.size();
+    }
+
+    /**
+     * 验证消息序列合法性。返回null=合法，非null=错误描述。
+     * 规则:
+     * - 不能有两个连续的同role消息(user→user或assistant→assistant)
+     * - tool消息前必须有assistant(含tool_calls)
+     * - system只能出现在索引0
+     */
+    private String validateMessageSequence() {
+        for (int i = 0; i < globalMessages.size(); i++) {
+            String role = globalMessages.get(i).path("role").asText("");
+            // system只能在索引0
+            if ("system".equals(role) && i > 0) {
+                return "system出现在索引" + i;
+            }
+            // 检查连续同role
+            if (i > 0) {
+                String prevRole = globalMessages.get(i - 1).path("role").asText("");
+                if (role.equals(prevRole) && !"system".equals(role)) {
+                    return String.format("连续两个%s (索引%d和%d)", role, i - 1, i);
+                }
+            }
+            // tool前必须是assistant且含tool_calls
+            if ("tool".equals(role) && i > 0) {
+                String prevRole = globalMessages.get(i - 1).path("role").asText("");
+                if (!"assistant".equals(prevRole)) {
+                    return String.format("tool消息(索引%d)前不是assistant而是%s", i, prevRole);
+                }
+            }
+        }
+        return null;
     }
 
     // ==========================================
