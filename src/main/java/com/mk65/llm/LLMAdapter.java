@@ -29,9 +29,11 @@ public class LLMAdapter {
     private final double temperature;
     private final int maxTokens;
 
-    /** 全局消息列表 — 系统提示 + 最近N轮对话 */
+    /** 全局消息列表 — system [+ 压缩摘要] + 最近N轮对话 */
     private final List<JsonNode> globalMessages = new ArrayList<>();
-    private static final int MAX_MESSAGES = 42; // system + 20轮×(user+assistant) 再多两条缓冲
+    private static final int MAX_MESSAGES = 42;  // 超过此值触发压缩
+    private static final double KEEP_RATIO = 0.30; // 压缩时保留后30%原样
+    private String systemPromptText = "";
 
     public LLMAdapter() {
         this.apiBase = MKConfig.BRAIN_API_BASE;
@@ -52,27 +54,25 @@ public class LLMAdapter {
      * 系统提示始终在 messages[0]，后续轮次追加在后面。
      */
     public void setSystemPrompt(String prompt) {
+        this.systemPromptText = prompt;
         globalMessages.clear();
         ObjectNode sys = mapper.createObjectNode();
         sys.put("role", "system");
         sys.put("content", prompt);
         globalMessages.add(sys);
-        log.info("[LLM] 系统提示已设置 ({}chars), 全局消息已重置", prompt.length());
+        log.info("[LLM] 系统提示已设置 ({}chars)", prompt.length());
     }
 
     /**
-     * 清空全局消息列表。用于异常恢复或手动重置上下文。
+     * 清空全局消息列表。保留system prompt。
      */
     public void clearContext() {
-        String sysContent = "";
-        if (!globalMessages.isEmpty() && "system".equals(globalMessages.get(0).path("role").asText(""))) {
-            sysContent = globalMessages.get(0).path("content").asText("");
-        }
         globalMessages.clear();
-        if (!sysContent.isBlank()) {
-            setSystemPrompt(sysContent);
-        }
-        log.info("[LLM] 全局上下文已清空");
+        ObjectNode sys = mapper.createObjectNode();
+        sys.put("role", "system");
+        sys.put("content", systemPromptText);
+        globalMessages.add(sys);
+        log.info("[LLM] 全局上下文已清空 (system保留)");
     }
 
     /**
@@ -89,8 +89,8 @@ public class LLMAdapter {
         userMsg.put("content", userMessage);
         globalMessages.add(userMsg);
 
-        // 修剪：保留 system + 最近 N 轮（轮次=user后必然有assistant，成对裁剪）
-        trimMessages();
+        // 超限压缩：前70% → 摘要user消息，后30%原样保留
+        compressContext();
 
         // 构建请求体
         ObjectNode body = mapper.createObjectNode();
@@ -158,7 +158,7 @@ public class LLMAdapter {
         toolMsg.put("name", toolName);
         toolMsg.put("content", result != null ? result : "");
         globalMessages.add(toolMsg);
-        trimMessages();
+        compressContext();
     }
 
     /**
@@ -183,7 +183,7 @@ public class LLMAdapter {
             }
         }
         globalMessages.add(assistant);
-        trimMessages();
+        compressContext();
     }
 
     public int getMessageCount() {
@@ -232,36 +232,83 @@ public class LLMAdapter {
     }
 
     /**
-     * 修剪全局消息列表。
-     * 保留 system + 最近的消息，成对裁剪 user/assistant 轮次。
-     * system 始终在索引0不动。
+     * 压缩全局消息列表。
+     *
+     * 超限时：保留后 KEEP_RATIO(30%) 的消息原样不动，
+     * 把前 70% 的消息压缩成一段摘要，和已有摘要合并，
+     * 作为 user 消息塞在 system prompt 之后。
      */
-    private void trimMessages() {
-        while (globalMessages.size() > MAX_MESSAGES) {
-            // 找到 system 之后的第一个非 system 消息删除
-            // 但要成对删（user 必须和对面的 assistant 一起删）
-            // 简化：从索引1开始，找到第一个 user 消息，把它和紧随的 assistant 一起删
-            if (globalMessages.size() <= 3) break; // system + 至少一对
+    private void compressContext() {
+        if (globalMessages.size() <= MAX_MESSAGES) return;
 
-            // 删最老的一轮：索引1的 user 和索引2的 assistant（如果索引2是assistant）
-            if (globalMessages.size() >= 3) {
-                String role1 = globalMessages.get(1).path("role").asText("");
-                globalMessages.remove(1); // 移除 user
-                // 如果下一个是 assistant 或 tool，也移除
-                if (globalMessages.size() > 1) {
-                    String role2 = globalMessages.get(1).path("role").asText("");
-                    if ("assistant".equals(role2) || "tool".equals(role2)) {
-                        globalMessages.remove(1);
-                    }
-                }
-                // 继续删 tool 消息（assistant 后面跟的 tool result）
-                while (globalMessages.size() > 1 && "tool".equals(globalMessages.get(1).path("role").asText(""))) {
-                    globalMessages.remove(1);
-                }
+        // 1. 收集旧摘要（如果索引1是摘要消息）
+        String oldDigest = "";
+        int digestAt = -1;
+        if (globalMessages.size() > 1
+                && "user".equals(globalMessages.get(1).path("role").asText(""))
+                && globalMessages.get(1).path("content").asText("").startsWith("[上下文摘要]")) {
+            oldDigest = globalMessages.get(1).path("content").asText("");
+            digestAt = 1;
+        }
+
+        // 2. 分割：后 30% 保留，前 70%（system+摘要之后的）压缩
+        int keepCount = Math.max(1, (int) ((globalMessages.size() - 1) * KEEP_RATIO));
+        int splitIndex = globalMessages.size() - keepCount;
+        if (splitIndex <= 1) splitIndex = 2; // 至少保留 system + 一轮
+
+        // 3. 扫描要压缩的消息，生成摘要
+        StringBuilder newDigest = new StringBuilder(oldDigest);
+        if (!oldDigest.isBlank()) newDigest.append("\n---\n");
+        newDigest.append("[最近活动 ").append(globalMessages.size() - splitIndex - keepCount + 1)
+                .append("条消息的压缩]\n");
+
+        int start = digestAt > 0 ? digestAt + 1 : 1; // 跳过system和已有摘要
+        int end = splitIndex;
+        for (int i = start; i < end; i++) {
+            JsonNode msg = globalMessages.get(i);
+            String role = msg.path("role").asText("");
+            String content = msg.path("content").asText("");
+            if (content.isBlank()) continue;
+
+            if ("tool".equals(role)) {
+                String name = msg.path("name").asText("");
+                String snip = content.length() > 80 ? content.substring(0, 80) + "..." : content;
+                newDigest.append("  [").append(name).append("] ").append(snip.replace("\n", " ")).append("\n");
             } else {
-                break;
+                String snip = content.length() > 150 ? content.substring(0, 150) + "..." : content;
+                newDigest.append("  [").append(role).append("] ").append(snip.replace("\n", " ")).append("\n");
             }
         }
+
+        // 4. 截断摘要
+        String digest = newDigest.toString().trim();
+        if (digest.length() > 3000) {
+            digest = digest.substring(0, 3000) + "...[截断]";
+        }
+
+        // 5. 提取保留的消息（后30%）
+        List<JsonNode> keep = new ArrayList<>();
+        for (int i = splitIndex; i < globalMessages.size(); i++) {
+            keep.add(globalMessages.get(i));
+        }
+
+        // 6. 重建列表
+        globalMessages.clear();
+
+        ObjectNode sys = mapper.createObjectNode();
+        sys.put("role", "system");
+        sys.put("content", systemPromptText);
+        globalMessages.add(sys);
+
+        ObjectNode dm = mapper.createObjectNode();
+        dm.put("role", "user");
+        dm.put("content", "[上下文摘要] 以下是之前对话的压缩记录：\n\n" + digest);
+        globalMessages.add(dm);
+
+        globalMessages.addAll(keep);
+
+        log.info("[LLM] 🔄 上下文压缩: {}→{}条 (摘要{}chars, 保留{}条)",
+                end - start + keep.size() + 2, globalMessages.size(), digest.length(), keep.size());
     }
 
     // ==========================================
