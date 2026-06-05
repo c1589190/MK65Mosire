@@ -88,6 +88,9 @@ public class Main {
             msg.aggregateMaxMessages=5
             msg.aggregatePrivateMin=1
             msg.aggregateGroupMin=3
+            msg.aggregateCharFlush=200
+            msg.aggregateMsPerChar=20
+            msg.aggregateMinWaitMs=500
 
             # ---------- 外源刺激 ----------
             stimulus.privateWeight=0.7

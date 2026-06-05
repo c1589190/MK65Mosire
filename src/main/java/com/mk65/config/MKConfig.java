@@ -62,6 +62,9 @@ public class MKConfig {
     public static int MSG_AGGREGATE_MAX_MESSAGES = 5;
     public static int MSG_AGGREGATE_PRIVATE_MIN = 1;
     public static int MSG_AGGREGATE_GROUP_MIN = 3;
+    public static int MSG_AGGREGATE_CHAR_FLUSH = 200;       // 总字符数超过此值立即flush
+    public static double MSG_AGGREGATE_MS_PER_CHAR = 20;    // 每个字符减少的等待毫秒
+    public static int MSG_AGGREGATE_MIN_WAIT_MS = 500;      // 最低等待毫秒（防0等待）
 
     // ========== 外源刺激 ==========
     public static double STIMULUS_PRIVATE_WEIGHT = 0.7;
@@ -146,6 +149,9 @@ public class MKConfig {
         MSG_AGGREGATE_MAX_MESSAGES = getInt(props, "msg.aggregateMaxMessages", MSG_AGGREGATE_MAX_MESSAGES);
         MSG_AGGREGATE_PRIVATE_MIN = getInt(props, "msg.aggregatePrivateMin", MSG_AGGREGATE_PRIVATE_MIN);
         MSG_AGGREGATE_GROUP_MIN = getInt(props, "msg.aggregateGroupMin", MSG_AGGREGATE_GROUP_MIN);
+        MSG_AGGREGATE_CHAR_FLUSH = getInt(props, "msg.aggregateCharFlush", MSG_AGGREGATE_CHAR_FLUSH);
+        MSG_AGGREGATE_MS_PER_CHAR = getDouble(props, "msg.aggregateMsPerChar", MSG_AGGREGATE_MS_PER_CHAR);
+        MSG_AGGREGATE_MIN_WAIT_MS = getInt(props, "msg.aggregateMinWaitMs", MSG_AGGREGATE_MIN_WAIT_MS);
 
         STIMULUS_PRIVATE_WEIGHT = getDouble(props, "stimulus.privateWeight", STIMULUS_PRIVATE_WEIGHT);
         STIMULUS_GROUP_WEIGHT = getDouble(props, "stimulus.groupWeight", STIMULUS_GROUP_WEIGHT);

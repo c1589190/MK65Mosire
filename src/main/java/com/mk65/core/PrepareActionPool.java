@@ -59,19 +59,25 @@ public class PrepareActionPool {
         synchronized (buckets) {
             MessageBucket bucket = buckets.computeIfAbsent(source, k -> new MessageBucket(source));
             bucket.messages.add(rawText);
+            bucket.totalChars += rawText.length();
             bucket.lastActivity = System.currentTimeMillis();
 
             int minMsgs = source.startsWith("qq_group:") ? MKConfig.MSG_AGGREGATE_GROUP_MIN : MKConfig.MSG_AGGREGATE_PRIVATE_MIN;
-            int effectiveMax = Math.max(minMsgs, 1);
-
-            if (bucket.messages.size() >= Math.max(effectiveMax, MKConfig.MSG_AGGREGATE_MAX_MESSAGES)) {
-                flushBucket(source);
-                return;
+            if (bucket.messages.size() >= Math.max(minMsgs, MKConfig.MSG_AGGREGATE_MAX_MESSAGES)) {
+                flushBucket(source); return;
             }
+            // 总字符数超过阈值 → 立即flush
+            if (bucket.totalChars >= MKConfig.MSG_AGGREGATE_CHAR_FLUSH) {
+                flushBucket(source); return;
+            }
+            // 动态等待：消息越长等得越短
+            int dynamicWait = (int)(MKConfig.MSG_AGGREGATE_WAIT_MS
+                    - (int)(bucket.totalChars * MKConfig.MSG_AGGREGATE_MS_PER_CHAR));
+            dynamicWait = Math.max(MKConfig.MSG_AGGREGATE_MIN_WAIT_MS, dynamicWait);
+
             if (bucket.flushTask != null) bucket.flushTask.cancel(false);
             bucket.flushTask = flushScheduler.schedule(
-                    () -> flushBucket(source),
-                    MKConfig.MSG_AGGREGATE_WAIT_MS, TimeUnit.MILLISECONDS);
+                    () -> flushBucket(source), dynamicWait, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -247,6 +253,7 @@ public class PrepareActionPool {
     private static class MessageBucket {
         final String source;
         final List<String> messages = new ArrayList<>();
+        int totalChars = 0;
         long lastActivity;
         ScheduledFuture<?> flushTask;
         MessageBucket(String source) { this.source = source; this.lastActivity = System.currentTimeMillis(); }
