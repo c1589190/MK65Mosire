@@ -340,6 +340,20 @@ public class ActionLoop {
                         scores.size(), nextActions.size());
             }
 
+            // ★ 自动刺激：工具执行完后，注入内部action让LLM处理结果
+            if (!toolRecords.isEmpty() && nextActions.isEmpty()) {
+                // finish_action没建next_actions → 自动补一个
+                List<String> infoTools = toolRecords.stream()
+                        .filter(r -> r.contains("recall") || r.contains("fetch_web")
+                                || r.contains("read_file") || r.contains("list_dir"))
+                        .toList();
+                if (!infoTools.isEmpty()) {
+                    String brief = infoTools.size() == 1 ? infoTools.get(0)
+                            : infoTools.size() + "个工具已返回结果";
+                    actionPool.pushInternal("上一轮的" + brief + "，请查看上下文中的工具结果并决定下一步", 0.7);
+                }
+            }
+
             MK65Debug.poolState(actionPool.size(), actionPool.peek() != null
                     ? actionPool.peek().rawText() : null);
 
