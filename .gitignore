@@ -1,0 +1,8 @@
+*.db
+*.db-shm
+*.db-wal
+target/
+logs/
+workspace/
+.idea/
+*.iml

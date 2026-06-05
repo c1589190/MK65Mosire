@@ -1,0 +1,129 @@
+package com.mk65.config;
+
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Properties;
+
+/**
+ * MK65Mosire 全局配置。
+ * 从 classpath 和当前工作目录的 application.properties 加载。
+ */
+public class MKConfig {
+
+    // ========== LLM ==========
+    public static String BRAIN_API_BASE = "http://127.0.0.1:3000/v1";
+    public static String BRAIN_API_KEY = "";
+    public static String BRAIN_CHAT_MODEL = "deepseek-v4-flash-max";
+    public static double BRAIN_TEMPERATURE = 0.6;
+    public static int BRAIN_MAX_TOKENS = 65535;
+    public static boolean BRAIN_STREAM = true;
+
+    // ========== NapcatQQ ==========
+    public static String NAPCAT_WS_URL = "127.0.0.1";
+    public static int NAPCAT_WS_PORT = 3001;
+    public static String NAPCAT_HTTP_URL = "http://127.0.0.1:3000";
+    public static String NAPCAT_TOKEN = "";
+
+    // ========== 搜索 ==========
+    public static String SEARCH_BRAVE_API_KEY = "";
+    public static String SEARCH_METASO_API_KEY = "";
+
+    // ========== 工作区 ==========
+    public static String WORKSPACE_DIR = "workspace";
+
+    // ========== 动机模型 ==========
+    public static double MOTIVATION_CONFLICT_THRESHOLD = 0.5;
+    public static int MOTIVATION_NOVELTY_MIN_COUNT = 3;
+    public static double MOTIVATION_DECAY_HALF_LIFE = 500.0;
+    public static int MOTIVATION_VACUUM_THRESHOLD = 1;
+
+    // ========== 认知循环 ==========
+    public static long CORE_TICK_MS = 2000;
+    public static int CORE_ROUND_TIMEOUT_SEC = 180;
+
+    // ========== 数据库 ==========
+    public static String DB_URL = "jdbc:sqlite:mk65_motivation.db";
+
+    static {
+        Properties props = new Properties();
+
+        // 1. classpath 默认配置
+        try (InputStream is = MKConfig.class.getClassLoader()
+                .getResourceAsStream("application.properties")) {
+            if (is != null) props.load(is);
+        } catch (Exception ignored) {}
+
+        // 2. 工作目录覆盖
+        Path cwdFile = Path.of("application.properties");
+        if (Files.exists(cwdFile)) {
+            try (FileInputStream fis = new FileInputStream(cwdFile.toFile())) {
+                Properties overlay = new Properties();
+                overlay.load(fis);
+                props.putAll(overlay);
+            } catch (Exception ignored) {}
+        }
+
+        // 3. 环境变量覆盖（SILICONFLOW_API_KEY / BRAIN_API_KEY 等）
+        overrideFromEnv(props);
+
+        // 4. 赋值静态字段
+        BRAIN_API_BASE = get(props, "llm.brain.apiBase", BRAIN_API_BASE);
+        BRAIN_API_KEY = get(props, "llm.brain.apiKey", BRAIN_API_KEY);
+        BRAIN_CHAT_MODEL = get(props, "llm.brain.chatModel", BRAIN_CHAT_MODEL);
+        BRAIN_TEMPERATURE = getDouble(props, "llm.brain.temperature", BRAIN_TEMPERATURE);
+        BRAIN_MAX_TOKENS = getInt(props, "llm.brain.maxTokens", BRAIN_MAX_TOKENS);
+        BRAIN_STREAM = getBool(props, "llm.brain.stream", BRAIN_STREAM);
+
+        NAPCAT_WS_URL = get(props, "napcat.wsUrl", NAPCAT_WS_URL);
+        NAPCAT_WS_PORT = getInt(props, "napcat.wsPort", NAPCAT_WS_PORT);
+        NAPCAT_HTTP_URL = get(props, "napcat.httpUrl", NAPCAT_HTTP_URL);
+        NAPCAT_TOKEN = get(props, "napcat.token", NAPCAT_TOKEN);
+
+        SEARCH_BRAVE_API_KEY = get(props, "search.braveApiKey", SEARCH_BRAVE_API_KEY);
+        SEARCH_METASO_API_KEY = get(props, "search.metasoApiKey", SEARCH_METASO_API_KEY);
+
+        WORKSPACE_DIR = get(props, "workspace.dir", WORKSPACE_DIR);
+
+        MOTIVATION_CONFLICT_THRESHOLD = getDouble(props, "motivation.conflictThreshold", MOTIVATION_CONFLICT_THRESHOLD);
+        MOTIVATION_NOVELTY_MIN_COUNT = getInt(props, "motivation.noveltyMinCount", MOTIVATION_NOVELTY_MIN_COUNT);
+        MOTIVATION_DECAY_HALF_LIFE = getDouble(props, "motivation.decayHalfLife", MOTIVATION_DECAY_HALF_LIFE);
+        MOTIVATION_VACUUM_THRESHOLD = getInt(props, "motivation.vacuumThreshold", MOTIVATION_VACUUM_THRESHOLD);
+
+        CORE_TICK_MS = getLong(props, "core.tickMs", CORE_TICK_MS);
+        CORE_ROUND_TIMEOUT_SEC = getInt(props, "core.roundTimeoutSec", CORE_ROUND_TIMEOUT_SEC);
+
+        DB_URL = get(props, "db.url", DB_URL);
+    }
+
+    private static void overrideFromEnv(Properties props) {
+        String brainKey = System.getenv("BRAIN_API_KEY");
+        if (brainKey != null && !brainKey.isBlank()) props.setProperty("llm.brain.apiKey", brainKey);
+        String sfKey = System.getenv("SILICONFLOW_API_KEY");
+        if (sfKey != null && !sfKey.isBlank()) props.setProperty("llm.brain.apiKey", sfKey);
+
+        String braveKey = System.getenv("BRAVE_API_KEY");
+        if (braveKey != null && !braveKey.isBlank()) props.setProperty("search.braveApiKey", braveKey);
+        String metasoKey = System.getenv("METASO_API_KEY");
+        if (metasoKey != null && !metasoKey.isBlank()) props.setProperty("search.metasoApiKey", metasoKey);
+    }
+
+    private static String get(Properties p, String key, String def) {
+        return p.getProperty(key, def);
+    }
+    private static int getInt(Properties p, String key, int def) {
+        try { return Integer.parseInt(p.getProperty(key)); } catch (Exception e) { return def; }
+    }
+    private static long getLong(Properties p, String key, long def) {
+        try { return Long.parseLong(p.getProperty(key)); } catch (Exception e) { return def; }
+    }
+    private static double getDouble(Properties p, String key, double def) {
+        try { return Double.parseDouble(p.getProperty(key)); } catch (Exception e) { return def; }
+    }
+    private static boolean getBool(Properties p, String key, boolean def) {
+        String v = p.getProperty(key);
+        if (v == null) return def;
+        return "true".equalsIgnoreCase(v.trim()) || "yes".equalsIgnoreCase(v.trim());
+    }
+}
