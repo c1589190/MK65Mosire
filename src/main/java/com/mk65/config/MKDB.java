@@ -65,12 +65,18 @@ public class MKDB {
                     action_tokens   TEXT NOT NULL DEFAULT '[]',
                     helpful_count   INTEGER NOT NULL DEFAULT 0,
                     recall_count    INTEGER NOT NULL DEFAULT 0,
+                    predecessor_ids TEXT NOT NULL DEFAULT '[]',
+                    resolved_oppositions TEXT NOT NULL DEFAULT '[]',
                     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """);
 
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_exp_source ON Experiences(source)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_exp_tokens ON Experiences(input_tokens)");
+
+            // 迁移旧数据库：新增列
+            ensureColumn("Experiences", "predecessor_ids", "TEXT NOT NULL DEFAULT '[]'");
+            ensureColumn("Experiences", "resolved_oppositions", "TEXT NOT NULL DEFAULT '[]'");
 
             log.info("[MKDB] SQLite 初始化完成: {}", MKConfig.DB_URL);
         } catch (SQLException e) {
@@ -81,6 +87,16 @@ public class MKDB {
 
     public static Connection getConnection() throws SQLException {
         return dataSource.getConnection();
+    }
+
+    /** 迁移辅助：如果列不存在则添加 */
+    public static void ensureColumn(String table, String column, String definition) {
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+        } catch (SQLException e) {
+            // 列已存在会抛异常，忽略
+        }
     }
 
     public static synchronized void shutdown() {

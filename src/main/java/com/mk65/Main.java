@@ -69,6 +69,8 @@ public class Main {
             motivation.noveltyMinCount=3
             motivation.decayHalfLife=500
             motivation.vacuumThreshold=1
+            motivation.oppositionThreshold=0.5
+            motivation.equivalentTokenThreshold=0.6
 
             # ---------- 经验系统 ----------
             memory.autoRecallTopN=3

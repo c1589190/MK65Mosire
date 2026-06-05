@@ -42,11 +42,12 @@ public class MemoryManager {
      */
     public int record(int roundNumber, String actionText, String source,
                        String thoughts, List<String> toolNames, List<String> toolResults,
-                       List<String> inputTokens, List<String> actionTokens) {
+                       List<String> inputTokens, List<String> actionTokens,
+                       List<Integer> predecessorIds, List<List<String>> resolvedOppositions) {
         String sql = """
             INSERT INTO Experiences
-            (round_number, action_text, source, thoughts, tool_names, tool_results, input_tokens, action_tokens)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (round_number, action_text, source, thoughts, tool_names, tool_results, input_tokens, action_tokens, predecessor_ids, resolved_oppositions)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """;
 
         try (Connection conn = MKDB.getConnection();
@@ -59,6 +60,8 @@ public class MemoryManager {
             ps.setString(6, toJson(toolResults));
             ps.setString(7, toJson(inputTokens));
             ps.setString(8, toJson(actionTokens));
+            ps.setString(9, toJson(predecessorIds != null ? predecessorIds : List.of()));
+            ps.setString(10, toJson(resolvedOppositions != null ? resolvedOppositions : List.of()));
             ps.executeUpdate();
 
             try (Statement stmt = conn.createStatement();
@@ -214,6 +217,70 @@ public class MemoryManager {
         } catch (SQLException e) {
             log.warn("[MemoryManager] 经验打分失败 id={}", expId, e);
         }
+    }
+
+    /**
+     * 查某个Exp的后继：哪些经验的predecessor_ids包含它。
+     */
+    public List<ExpMatch> findSuccessors(int expId, int limit) {
+        String sql = "SELECT id, round_number, action_text, source, thoughts, tool_names, tool_results, input_tokens, helpful_count FROM Experiences WHERE predecessor_ids LIKE ? ORDER BY id DESC LIMIT " + limit;
+        List<ExpMatch> results = new ArrayList<>();
+        try (Connection conn = MKDB.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, "%" + expId + "%");
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(new ExpMatch(rs.getInt("id"), rs.getInt("round_number"),
+                            rs.getString("action_text"), rs.getString("source"),
+                            rs.getString("thoughts"),
+                            fromJsonArray(rs.getString("tool_names")),
+                            fromJsonArray(rs.getString("tool_results")), 0));
+                }
+            }
+        } catch (SQLException e) {
+            log.error("[MemoryManager] 后继查询失败 expId={}", expId, e);
+        }
+        return results;
+    }
+
+    /**
+     * 查哪些经验解决过和当前类似的对立组。
+     * oppositionPairs: [[tokenA, tokenB], [tokenC, tokenD], ...]
+     */
+    public List<ExpMatch> findConflictResolutions(List<List<String>> oppositionPairs) {
+        if (oppositionPairs == null || oppositionPairs.isEmpty()) return List.of();
+        List<ExpMatch> results = new ArrayList<>();
+        Set<Integer> seen = new HashSet<>();
+
+        for (List<String> pair : oppositionPairs) {
+            if (pair.size() < 2) continue;
+            String a = pair.get(0);
+            String b = pair.get(1);
+
+            // 包含这两个token的对立经验
+            String sql = "SELECT id, round_number, action_text, source, thoughts, tool_names, tool_results, input_tokens, helpful_count FROM Experiences WHERE resolved_oppositions LIKE ? AND resolved_oppositions LIKE ? ORDER BY id DESC LIMIT 5";
+
+            try (Connection conn = MKDB.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, "%\"" + a + "\"%");
+                ps.setString(2, "%\"" + b + "\"%");
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        int id = rs.getInt("id");
+                        if (seen.add(id)) {
+                            results.add(new ExpMatch(id, rs.getInt("round_number"),
+                                    rs.getString("action_text"), rs.getString("source"),
+                                    rs.getString("thoughts"),
+                                    fromJsonArray(rs.getString("tool_names")),
+                                    fromJsonArray(rs.getString("tool_results")), 0));
+                        }
+                    }
+                }
+            } catch (SQLException e) {
+                log.debug("[MemoryManager] 冲突解决查询失败 pair=[{},{}]", a, b);
+            }
+        }
+        return results;
     }
 
     private void incrementRecallCount(int expId) {

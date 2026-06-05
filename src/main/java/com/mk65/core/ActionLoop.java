@@ -232,15 +232,34 @@ public class ActionLoop {
             Map<String, Double> overallVotes = computeOverallVotes(dist);
             MK65Debug.motivationQuery(dist, novelTokens, conflicts, overallVotes);
 
+            // ★ 等价token
+            Map<String, Set<String>> equivalents = new HashMap<>();
+            for (String token : inputTokens) {
+                Set<String> eq = ConflictDetector.findEquivalents(token, dist);
+                if (!eq.isEmpty()) equivalents.put(token, eq);
+            }
+
             // ★ 自动经验检索
             MemoryManager mem = MemoryManager.getInstance();
             java.util.List<MemoryManager.ExpMatch> autoMemories = mem.autoRecall(inputTokens, MKConfig.MEMORY_AUTO_RECALL_TOPN);
             MK65Debug.autoMemories(autoMemories);
 
+            // ★ 对立组的历史解决方案
+            Map<String, java.util.List<MemoryManager.ExpMatch>> conflictResolutions = new HashMap<>();
+            if (!conflicts.isEmpty()) {
+                for (ConflictDetector.ConflictPair c : conflicts) {
+                    String pairKey = c.tokenA() + "|" + c.tokenB();
+                    java.util.List<MemoryManager.ExpMatch> resolutions = mem.findConflictResolutions(
+                            java.util.List.of(java.util.List.of(c.tokenA(), c.tokenB())));
+                    if (!resolutions.isEmpty()) conflictResolutions.put(pairKey, resolutions);
+                }
+            }
+
             boolean hasHistory = !dist.isEmpty() || !autoMemories.isEmpty();
 
             MotivationReport report = new MotivationReport(
-                    overallVotes, dist, conflicts, novelTokens, autoMemories, hasHistory);
+                    overallVotes, dist, conflicts, novelTokens, autoMemories,
+                    conflictResolutions, equivalents, hasHistory);
 
             // ── 3. 构建 prompt ──
             String userMessage = buildUserMessage(input.actionText(), report);
@@ -324,12 +343,24 @@ public class ActionLoop {
             List<String> executedToolNames = result.hasToolCalls()
                     ? result.toolCalls().stream().map(ToolCall::name).toList()
                     : List.of();
-            // 优先用 finish_action 的 thoughts，其次用 LLM 原始 content
             String thoughts = com.mk65.tool.FinishAction.getRoundThoughts();
             if (thoughts.isBlank()) thoughts = result.content() != null ? result.content() : "";
+
+            // ★ 收集predecessor_ids: LLM打了1分的历史Exp
+            List<Integer> predecessorIds = com.mk65.tool.FinishAction.getRoundScores().stream()
+                    .filter(s -> s.score() > 0)
+                    .map(com.mk65.tool.FinishAction.ExpScore::experienceId)
+                    .toList();
+
+            // ★ 收集resolved_oppositions: 本轮检测到的对立token对
+            List<List<String>> resolvedOppositions = conflicts.stream()
+                    .map(c -> List.of(c.tokenA(), c.tokenB()))
+                    .toList();
+
             int expId = mem.record(round, input.actionText(), input.source(),
                     thoughts, executedToolNames, toolRecords,
-                    inputTokens, allActionTokens);
+                    inputTokens, allActionTokens,
+                    predecessorIds, resolvedOppositions);
             MK65Debug.experienceRecorded(expId, round, executedToolNames, inputTokens, allActionTokens);
 
             // finish_action 结算日志
@@ -389,25 +420,7 @@ public class ActionLoop {
     }
 
     private String buildUserMessage(String actionText, MotivationReport report) {
-        try {
-            Template tmpl = freemarker.getTemplate("USER.md.ftl");
-            java.io.StringWriter sw = new java.io.StringWriter();
-            Map<String, Object> data = new java.util.HashMap<>();
-            data.put("actionText", actionText);
-            data.put("hasHistory", report.hasHistory());
-            data.put("overallVotes", report.getOverallVotes());
-            // perTokenDist: Map<String, Map<String, Double>> → FreeMarker可遍历
-            // 但Java的Map需要特殊适配。改用MotivationReport暴露getter。
-            data.put("perTokenDist", report.getPerTokenDist());
-            data.put("autoMemories", report.getAutoMemories());
-            data.put("conflicts", report.getConflicts());
-            data.put("novelTokens", report.getNovelTokens());
-            tmpl.process(data, sw);
-            return sw.toString();
-        } catch (Exception e) {
-            // fallback: 用MotivationReport的toPromptBlock
-            return "【当前输入】\n" + actionText + "\n\n" + report.toPromptBlock();
-        }
+        return "【当前输入】\n" + actionText + "\n\n" + report.toPromptBlock();
     }
 
     private ArrayNode buildToolsArray() {

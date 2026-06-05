@@ -53,6 +53,8 @@ public class MKConfig {
     public static int MEMORY_RECALL_MAX_RESULTS = 10;
     public static int MEMORY_AUTO_RECALL_SCAN_LIMIT = 500;
     public static double MEMORY_HELPFUL_SCALE = 0.5;
+    public static double OPPOSITION_DISPLAY_THRESHOLD = 0.5;   // 冲突度多高才在报告中显示
+    public static double EQUIVALENT_TOKEN_THRESHOLD = 0.6;      // coMatrix行向量相似度多高视为等价token
 
     // ========== 消息聚合 ==========
     public static long MSG_AGGREGATE_WAIT_MS = 3000;
@@ -121,6 +123,8 @@ public class MKConfig {
         MEMORY_RECALL_MAX_RESULTS = getInt(props, "memory.recallMaxResults", MEMORY_RECALL_MAX_RESULTS);
         MEMORY_AUTO_RECALL_SCAN_LIMIT = getInt(props, "memory.autoRecallScanLimit", MEMORY_AUTO_RECALL_SCAN_LIMIT);
         MEMORY_HELPFUL_SCALE = getDouble(props, "memory.helpfulScaleFactor", MEMORY_HELPFUL_SCALE);
+        OPPOSITION_DISPLAY_THRESHOLD = getDouble(props, "motivation.oppositionThreshold", OPPOSITION_DISPLAY_THRESHOLD);
+        EQUIVALENT_TOKEN_THRESHOLD = getDouble(props, "motivation.equivalentTokenThreshold", EQUIVALENT_TOKEN_THRESHOLD);
 
         MSG_AGGREGATE_WAIT_MS = getLong(props, "msg.aggregateWaitMs", MSG_AGGREGATE_WAIT_MS);
         MSG_AGGREGATE_COOLDOWN_MS = getLong(props, "msg.aggregateCooldownMs", MSG_AGGREGATE_COOLDOWN_MS);

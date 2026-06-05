@@ -2,6 +2,8 @@ package com.mk65.motivation;
 
 import com.mk65.config.MKConfig;
 
+import com.mk65.config.MKConfig;
+
 import java.util.*;
 
 /**
@@ -76,4 +78,25 @@ public class ConflictDetector {
             Map<String, Double> distA,
             Map<String, Double> distB
     ) {}
+
+    /**
+     * 找和指定token实践倾向最近的其他token（等价token）。
+     * 基于coMatrix行向量的余弦相似度。
+     */
+    public static Set<String> findEquivalents(String token, Map<String, Map<String, Double>> allDists) {
+        Set<String> equivalents = new HashSet<>();
+        Map<String, Double> targetRow = allDists.get(token);
+        if (targetRow == null || targetRow.isEmpty()) return equivalents;
+
+        double threshold = MKConfig.EQUIVALENT_TOKEN_THRESHOLD;
+        for (Map.Entry<String, Map<String, Double>> e : allDists.entrySet()) {
+            if (e.getKey().equals(token)) continue;
+            if (e.getValue().isEmpty()) continue;
+            double sim = 1.0 - computeConflict(targetRow, e.getValue());
+            if (sim > threshold) {
+                equivalents.add(e.getKey());
+            }
+        }
+        return equivalents;
+    }
 }
