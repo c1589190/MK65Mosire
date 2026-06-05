@@ -78,6 +78,10 @@ public class Main {
             memory.autoRecallScanLimit=500
             memory.helpfulScaleFactor=0.5
 
+            # ---------- 聊天历史 ----------
+            chat.historyAutoCount=10
+            chat.historyToolCount=48
+
             # ---------- 消息聚合 ----------
             msg.aggregateWaitMs=3000
             msg.aggregateCooldownMs=5000
@@ -153,6 +157,7 @@ public class Main {
                         loop.getActionPool().pushExternal(source, text));
                 napcat.start();
                 SendMessage.setNapcat(napcat);
+                com.mk65.tool.GetChatHistory.setNapcat(napcat);
                 log.info("[Main] NapcatQQ 适配器已启动");
             } catch (URISyntaxException e) {
                 log.error("[Main] NapcatQQ URL 配置错误，将以纯控制台模式运行", e);

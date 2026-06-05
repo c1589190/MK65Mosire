@@ -99,6 +99,7 @@ public class ProcessEncoder {
         if (lower.contains("recall")) tokens.add("action:recall");
         if (lower.contains("create_task")) tokens.add("action:create_task");
         if (lower.contains("finish_action")) tokens.add("action:finish_action");
+        if (lower.contains("get_chat_history")) tokens.add("action:get_chat_history");
 
         return tokens;
     }

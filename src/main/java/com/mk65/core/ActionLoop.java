@@ -112,6 +112,7 @@ public class ActionLoop {
         registerTool(new com.mk65.tool.ReadFile(workspace));
         registerTool(new com.mk65.tool.WriteFile(workspace));
         registerTool(new com.mk65.tool.Recall());
+        registerTool(new com.mk65.tool.GetChatHistory());
         registerTool(new com.mk65.tool.CreateTask());
         registerTool(new com.mk65.tool.FinishAction());
         com.mk65.tool.CreateTask.setActionPool(actionPool);

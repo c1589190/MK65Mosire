@@ -74,6 +74,10 @@ public class MKConfig {
     public static double POOL_WAITING_WEIGHT = 0.01;
     public static double POOL_ENDOGENOUS_MARGIN = 0.01;
 
+    // ========== 聊天历史 ==========
+    public static int CHAT_HISTORY_AUTO_COUNT = 10;
+    public static int CHAT_HISTORY_TOOL_COUNT = 48;
+
     // ========== 数据库 ==========
     public static String DB_URL = "jdbc:sqlite:mk65_motivation.db";
     public static boolean DEBUG_AUTO_ENABLE = false;
@@ -151,6 +155,9 @@ public class MKConfig {
 
         POOL_WAITING_WEIGHT = getDouble(props, "pool.waitingWeight", POOL_WAITING_WEIGHT);
         POOL_ENDOGENOUS_MARGIN = getDouble(props, "pool.endogenousMargin", POOL_ENDOGENOUS_MARGIN);
+
+        CHAT_HISTORY_AUTO_COUNT = getInt(props, "chat.historyAutoCount", CHAT_HISTORY_AUTO_COUNT);
+        CHAT_HISTORY_TOOL_COUNT = getInt(props, "chat.historyToolCount", CHAT_HISTORY_TOOL_COUNT);
 
         DB_URL = get(props, "db.url", DB_URL);
         DEBUG_AUTO_ENABLE = getBool(props, "debug.autoEnable", DEBUG_AUTO_ENABLE);

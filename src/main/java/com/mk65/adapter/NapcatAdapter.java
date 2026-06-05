@@ -123,8 +123,12 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
                 return;
             }
 
+            // ★ 自动拉取历史记录并拼入消息
+            String historyText = fetchRecentHistory(source);
+            String textWithHistory = historyText.isEmpty() ? text : text + "\n\n【最近聊天记录】\n" + historyText;
+
             if (messageCallback != null) {
-                messageCallback.accept(source, text);
+                messageCallback.accept(source, textWithHistory);
             }
         } catch (Exception e) {
             log.warn("[Napcat] 消息解析失败: {}", raw.length() > 100 ? raw.substring(0, 100) : raw);
@@ -191,6 +195,118 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
     }
 
     public String getSelfId() { return selfId; }
+
+    // ═══════════════════════════════════════════
+    // 历史记录
+    // ═══════════════════════════════════════════
+
+    /** 根据source自动拉取最近历史 */
+    private String fetchRecentHistory(String source) {
+        int count = MKConfig.CHAT_HISTORY_AUTO_COUNT;
+        if (count <= 0) return "";
+
+        try {
+            java.util.List<String> history;
+            if (source.startsWith("qq_group:")) {
+                long groupId = Long.parseLong(source.substring("qq_group:".length()));
+                history = getGroupHistorySync(groupId, count);
+            } else if (source.startsWith("qqid:") || source.startsWith("qq_private:")) {
+                int prefix = source.startsWith("qq_private:") ? "qq_private:".length() : "qqid:".length();
+                long userId = Long.parseLong(source.substring(prefix));
+                history = getFriendHistorySync(userId, count);
+            } else {
+                return "";
+            }
+            if (history == null || history.isEmpty()) return "";
+            return String.join("\n", history);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    public java.util.List<String> getGroupHistorySync(long groupId, int count) {
+        java.util.List<String> list = new java.util.ArrayList<>();
+        try {
+            String url = httpBase + "/get_group_msg_history";
+            ObjectNode payload = mapper.createObjectNode()
+                    .put("group_id", groupId).put("message_seq", 0).put("count", count);
+            String body = httpPostWithBody(url, payload.toString());
+            if (body != null && !body.isBlank()) {
+                JsonNode root = mapper.readTree(body);
+                JsonNode msgs = root.path("data").path("messages");
+                if (msgs.isArray()) {
+                    for (JsonNode m : msgs) {
+                        String name = m.path("sender").path("card").asText("");
+                        if (name.isBlank()) name = m.path("sender").path("nickname").asText("");
+                        if (name.isBlank()) name = String.valueOf(m.path("user_id").asLong());
+                        String text = extractText(m.path("message"));
+                        if (!text.isBlank()) list.add(name + ": " + text);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[Napcat] 获取群历史失败 group={}", groupId, e);
+        }
+        return list;
+    }
+
+    public java.util.List<String> getFriendHistorySync(long userId, int count) {
+        java.util.List<String> list = new java.util.ArrayList<>();
+        try {
+            String url = httpBase + "/get_friend_msg_history";
+            ObjectNode payload = mapper.createObjectNode()
+                    .put("user_id", userId).put("message_seq", 0).put("count", count);
+            String body = httpPostWithBody(url, payload.toString());
+            if (body != null && !body.isBlank()) {
+                JsonNode root = mapper.readTree(body);
+                JsonNode msgs = root.path("data").path("messages");
+                if (msgs.isArray()) {
+                    for (JsonNode m : msgs) {
+                        String name = m.path("sender").path("nickname").asText("");
+                        if (name.isBlank()) name = String.valueOf(m.path("user_id").asLong());
+                        String text = extractText(m.path("message"));
+                        if (!text.isBlank()) list.add(name + ": " + text);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[Napcat] 获取私聊历史失败 user={}", userId, e);
+        }
+        return list;
+    }
+
+    /** HTTP POST 返回响应体字符串 */
+    private String httpPostWithBody(String url, String jsonBody) {
+        try {
+            RequestBody reqBody = RequestBody.create(MediaType.parse("application/json"), jsonBody);
+            Request.Builder b = new Request.Builder().url(url).post(reqBody);
+            if (token != null && !token.isBlank()) b.addHeader("Authorization", "Bearer " + token);
+            try (Response resp = httpClient.newCall(b.build()).execute()) {
+                if (resp.isSuccessful() && resp.body() != null) return resp.body().string();
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /** 从Napcat消息JSON中提取纯文本 */
+    private static String extractText(JsonNode messageNode) {
+        if (messageNode.isTextual()) return messageNode.asText();
+        if (messageNode.isArray()) {
+            StringBuilder sb = new StringBuilder();
+            for (JsonNode seg : messageNode) {
+                String type = seg.path("type").asText("");
+                if ("text".equals(type)) {
+                    sb.append(seg.path("data").path("text").asText(""));
+                } else if ("image".equals(type)) {
+                    sb.append("[图片]");
+                } else if ("at".equals(type)) {
+                    sb.append("@").append(seg.path("data").path("qq").asText(""));
+                }
+            }
+            return sb.toString();
+        }
+        return messageNode.asText("");
+    }
 
     private static URI buildWsUri() throws URISyntaxException {
         String url = MKConfig.NAPCAT_WS_URL;
