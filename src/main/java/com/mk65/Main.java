@@ -85,6 +85,17 @@ public class Main {
             msg.aggregatePrivateMin=1
             msg.aggregateGroupMin=3
 
+            # ---------- 外源刺激 ----------
+            stimulus.privateWeight=0.7
+            stimulus.groupWeight=0.5
+            stimulus.consoleWeight=0.8
+            stimulus.internalWeight=0.3
+            stimulus.lengthDivisor=20
+
+            # ---------- 行动池权重 ----------
+            pool.waitingWeight=0.01
+            pool.endogenousMargin=0.01
+
             # ---------- 认知循环 ----------
             core.tickMs=2000
             core.roundTimeoutSec=180

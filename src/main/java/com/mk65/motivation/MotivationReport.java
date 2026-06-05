@@ -1,5 +1,6 @@
 package com.mk65.motivation;
 
+import com.mk65.core.PrepareActionPool;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -13,10 +14,9 @@ public class MotivationReport {
     private final List<ConflictDetector.ConflictPair> conflicts;
     private final Set<String> novelTokens;
     private final List<MemoryManager.ExpMatch> autoMemories;
-    // ★ 每个冲突对的历史解决方案
     private final Map<String, List<MemoryManager.ExpMatch>> conflictResolutions;
-    // ★ 等价token映射
     private final Map<String, Set<String>> equivalentTokens;
+    private final List<PrepareActionPool.ActionSummary> actionPoolList;
     private final boolean hasHistory;
 
     public MotivationReport(
@@ -27,6 +27,7 @@ public class MotivationReport {
             List<MemoryManager.ExpMatch> autoMemories,
             Map<String, List<MemoryManager.ExpMatch>> conflictResolutions,
             Map<String, Set<String>> equivalentTokens,
+            List<PrepareActionPool.ActionSummary> actionPoolList,
             boolean hasHistory) {
         this.overallVotes = overallVotes;
         this.perTokenDistribution = perTokenDistribution;
@@ -35,6 +36,7 @@ public class MotivationReport {
         this.autoMemories = autoMemories != null ? autoMemories : List.of();
         this.conflictResolutions = conflictResolutions != null ? conflictResolutions : Map.of();
         this.equivalentTokens = equivalentTokens != null ? equivalentTokens : Map.of();
+        this.actionPoolList = actionPoolList != null ? actionPoolList : List.of();
         this.hasHistory = hasHistory;
     }
 
@@ -54,7 +56,6 @@ public class MotivationReport {
                     .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
                     .limit(8)
                     .forEach(e -> sb.append(String.format("  %-40s 权重: %.1f\n", e.getKey(), e.getValue())));
-
             sb.append("\n各token行动分布:\n");
             perTokenDistribution.forEach((token, dist) -> {
                 if (dist.isEmpty()) return;
@@ -70,11 +71,9 @@ public class MotivationReport {
 
         // 2. 等价token
         if (!equivalentTokens.isEmpty()) {
-            sb.append("🔀 实践等价（不同token指向相同行动）:\n");
+            sb.append("🔀 实践等价:\n");
             equivalentTokens.forEach((token, equivs) -> {
-                if (!equivs.isEmpty()) {
-                    sb.append(String.format("  [%s] ≈ %s\n", token, equivs));
-                }
+                if (!equivs.isEmpty()) sb.append(String.format("  [%s] ≈ %s\n", token, equivs));
             });
             sb.append("\n");
         }
@@ -83,30 +82,18 @@ public class MotivationReport {
         if (!conflicts.isEmpty()) {
             sb.append("⚠️ 行动冲突:\n");
             for (ConflictDetector.ConflictPair c : conflicts) {
-                sb.append(String.format("  [%s] vs [%s] — 冲突度: %.2f\n",
-                        c.tokenA(), c.tokenB(), c.conflictScore()));
-
-                // 等价范围
-                Set<String> equivA = equivalentTokens.getOrDefault(c.tokenA(), Set.of());
-                Set<String> equivB = equivalentTokens.getOrDefault(c.tokenB(), Set.of());
-                if (!equivA.isEmpty() || !equivB.isEmpty()) {
-                    sb.append(String.format("    等价: [%s]≈%s, [%s]≈%s\n",
-                            c.tokenA(), equivA, c.tokenB(), equivB));
-                }
-
-                // 历史解决方案
+                sb.append(String.format("  [%s] vs [%s] — 冲突度: %.2f\n", c.tokenA(), c.tokenB(), c.conflictScore()));
                 String pairKey = c.tokenA() + "|" + c.tokenB();
                 List<MemoryManager.ExpMatch> resolutions = conflictResolutions.getOrDefault(pairKey, List.of());
                 if (!resolutions.isEmpty()) {
                     sb.append(String.format("    📖 历史解决方案 (%d条):\n", resolutions.size()));
                     for (MemoryManager.ExpMatch r : resolutions) {
-                        sb.append(String.format("       Exp#%d R%d: %s → %s\n",
-                                r.id(), r.roundNumber(),
+                        sb.append(String.format("       Exp#%d R%d: %s → %s\n", r.id(), r.roundNumber(),
                                 r.actionText().length() > 60 ? r.actionText().substring(0, 60) + "..." : r.actionText(),
                                 r.toolNames().isEmpty() ? "(纯文本)" : String.join(",", r.toolNames())));
                     }
                 } else {
-                    sb.append("    (无历史解决方案 — 首次遇到此对立的组合)\n");
+                    sb.append("    (无历史解决方案 — 首次遇到此对立组合)\n");
                 }
             }
             sb.append("\n");
@@ -114,58 +101,47 @@ public class MotivationReport {
 
         // 4. 关联历史经验
         if (!autoMemories.isEmpty()) {
-            sb.append("📖 关联历史经验（Jaccard场景匹配）:\n");
+            sb.append("📖 关联历史经验:\n");
             for (MemoryManager.ExpMatch m : autoMemories) {
-                sb.append(String.format("  相似度 %.2f [Exp#%d R%d]: %s\n",
-                        m.jaccard(), m.id(), m.roundNumber(),
+                sb.append(String.format("  相似度 %.2f [Exp#%d R%d]: %s\n", m.jaccard(), m.id(), m.roundNumber(),
                         m.actionText().length() > 100 ? m.actionText().substring(0, 100) + "..." : m.actionText()));
-                if (!m.toolNames().isEmpty()) {
+                if (!m.toolNames().isEmpty())
                     sb.append("    → 工具: ").append(String.join(", ", m.toolNames())).append("\n");
-                }
             }
             sb.append("\n");
         }
 
-        // 5. 实践态度
+        // 5. 行动池
+        if (!actionPoolList.isEmpty()) {
+            sb.append("📋 当前行动池（按选择评分排序，可在finish_action中用select_next指定下一个）:\n");
+            for (PrepareActionPool.ActionSummary a : actionPoolList) {
+                sb.append(String.format("  [%d] 得分=%.2f | %s — \"%s\"\n",
+                        a.index(), a.score(), a.source(), a.preview()));
+                sb.append(String.format("      ⏳等待:%d轮 | 🔥外源:%.2f | 💡内源:%.2f\n",
+                        a.waitingRounds(), a.exogenous(), a.endogenous()));
+                if (a.novelTokens() > 0)
+                    sb.append(String.format("      🆕新颖token: %d个 | ⚠️对立: %s\n", a.novelTokens(), a.oppositions()));
+            }
+            sb.append("\n");
+        }
+
+        // 6. 实践态度
         if (!overallVotes.isEmpty() || !conflicts.isEmpty()) {
             sb.append("🎯 实践态度:\n");
-            // 行动把握度
-            double maxActionWeight = overallVotes.values().stream().max(Double::compare).orElse(0.0);
-            String actionConfidence = maxActionWeight > 5 ? "强" : (maxActionWeight > 1 ? "中" : "弱");
-            sb.append(String.format("  行动把握度: %s\n", actionConfidence));
+            double maxW = overallVotes.values().stream().max(Double::compare).orElse(0.0);
+            sb.append(String.format("  行动把握度: %s\n", maxW > 5 ? "强" : (maxW > 1 ? "中" : "弱")));
+            double maxJ = autoMemories.stream().mapToDouble(MemoryManager.ExpMatch::jaccard).max().orElse(0);
+            sb.append(String.format("  场景熟悉度: %s\n", maxJ > 0.3 ? "高" : (maxJ > 0.1 ? "中" : "低")));
 
-            // 场景熟悉度
-            double maxJaccard = autoMemories.stream().mapToDouble(MemoryManager.ExpMatch::jaccard).max().orElse(0);
-            String sceneFamiliarity = maxJaccard > 0.3 ? "高" : (maxJaccard > 0.1 ? "中" : "低");
-            sb.append(String.format("  场景熟悉度: %s (maxJaccard=%.2f)\n", sceneFamiliarity, maxJaccard));
-
-            // 认知冲突状态
             if (!conflicts.isEmpty()) {
-                double maxConflict = conflicts.stream().mapToDouble(ConflictDetector.ConflictPair::conflictScore).max().orElse(0);
-                boolean hasResolutions = conflictResolutions.values().stream().anyMatch(l -> !l.isEmpty());
-                if (hasResolutions) {
-                    sb.append("  认知冲突: 存在(有历史解决方案可供参考)\n");
-                    sb.append("  → 建议: 参照历史解决方案的模式处理，根据当前差异微调\n");
-                } else {
-                    sb.append(String.format("  认知冲突: 存在(最大冲突度=%.2f，无历史解决方案)\n", maxConflict));
-                    sb.append("  → 建议: 对立方向需要你独立判断。选择一方执行，本轮经验将成为未来解决方案。\n");
-                }
+                boolean hasRes = conflictResolutions.values().stream().anyMatch(l -> !l.isEmpty());
+                sb.append("  认知冲突: ").append(hasRes ? "有(有历史方案可供参考)" : "有(无历史方案, 需主动求解)").append("\n");
             } else {
-                sb.append("  认知冲突: 无\n");
-                sb.append("  → 建议: 按行动倾向执行，惯性处理即可。\n");
+                sb.append("  认知冲突: 无 → 惯性处理即可\n");
             }
-
-            // 新异程度
-            if (!novelTokens.isEmpty()) {
-                sb.append(String.format("  新异程度: %d个新token: %s\n", novelTokens.size(), novelTokens));
-                sb.append("  → 新token无历史统计，你的行动会成为它们的第一个模板。\n");
-            }
+            if (!novelTokens.isEmpty())
+                sb.append(String.format("  新异token: %d个: %s\n", novelTokens.size(), novelTokens));
             sb.append("\n");
-        }
-
-        // 6. 新异token
-        if (!novelTokens.isEmpty()) {
-            sb.append("🆕 新异token: ").append(String.join(", ", novelTokens)).append("\n\n");
         }
 
         return sb.toString();

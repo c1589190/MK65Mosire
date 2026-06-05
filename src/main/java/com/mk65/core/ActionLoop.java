@@ -257,9 +257,13 @@ public class ActionLoop {
 
             boolean hasHistory = !dist.isEmpty() || !autoMemories.isEmpty();
 
+            // ★ 行动池
+            actionPool.setRound(round);
+            List<PrepareActionPool.ActionSummary> actionList = actionPool.getActionList();
+
             MotivationReport report = new MotivationReport(
                     overallVotes, dist, conflicts, novelTokens, autoMemories,
-                    conflictResolutions, equivalents, hasHistory);
+                    conflictResolutions, equivalents, actionList, hasHistory);
 
             // ── 3. 构建 prompt ──
             String userMessage = buildUserMessage(input.actionText(), report);
@@ -363,12 +367,16 @@ public class ActionLoop {
                     predecessorIds, resolvedOppositions);
             MK65Debug.experienceRecorded(expId, round, executedToolNames, inputTokens, allActionTokens);
 
-            // finish_action 结算日志
+            // finish_action 结算日志 + select_next 内源加成
             var scores = com.mk65.tool.FinishAction.getRoundScores();
             var nextActions = com.mk65.tool.FinishAction.getRoundNextActions();
-            if (!scores.isEmpty() || !nextActions.isEmpty()) {
-                log.info("[ActionLoop] 🧠 finish_action结算: 经验打分{}条, 后续任务{}个",
-                        scores.size(), nextActions.size());
+            int selectedNext = com.mk65.tool.FinishAction.getSelectedNext();
+            if (selectedNext >= 0) {
+                actionPool.applyEndogenousBoost(selectedNext);
+            }
+            if (!scores.isEmpty() || !nextActions.isEmpty() || selectedNext >= 0) {
+                log.info("[ActionLoop] 🧠 finish_action结算: 经验打分{}条, 后续任务{}个, select_next={}",
+                        scores.size(), nextActions.size(), selectedNext >= 0 ? "#" + selectedNext : "无");
             }
 
             // ★ 自动刺激：工具执行完后，注入内部action让LLM处理结果

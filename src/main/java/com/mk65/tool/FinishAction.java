@@ -33,6 +33,7 @@ public class FinishAction implements MKTool {
     private static final List<ExpScore> roundScores = new ArrayList<>();
     private static final List<NextAction> roundNextActions = new ArrayList<>();
     private static String roundThoughts = "";
+    private static int selectedNext = -1;
 
     public static void setActionPool(PrepareActionPool pool) { actionPool = pool; }
     public static void setMemoryManager(MemoryManager mm) { memoryManager = mm; }
@@ -42,11 +43,13 @@ public class FinishAction implements MKTool {
         roundScores.clear();
         roundNextActions.clear();
         roundThoughts = "";
+        selectedNext = -1;
     }
 
     public static List<ExpScore> getRoundScores() { return List.copyOf(roundScores); }
     public static List<NextAction> getRoundNextActions() { return List.copyOf(roundNextActions); }
     public static String getRoundThoughts() { return roundThoughts; }
+    public static int getSelectedNext() { return selectedNext; }
 
     @Override
     public String getName() { return "finish_action"; }
@@ -91,6 +94,11 @@ public class FinishAction implements MKTool {
         nap.putObject("description").put("type", "string").put("description", "任务描述");
         nap.putObject("priority").put("type", "number").put("description", "优先级 0.0~1.0，默认0.3");
 
+        // select_next: LLM 选择下一个执行的Action编号
+        ObjectNode selNext = props.putObject("select_next");
+        selNext.put("type", "integer");
+        selNext.put("description", "可选。如果你想指定行动池中下一个要处理的任务，填它的编号（见动机报告的'当前行动池'）。不填则系统按评分自动选择。选中的任务会获得持久的优先加成。");
+
         ArrayNode required = params.putArray("required");
         required.add("thoughts");
         required.add("experience_scoring");
@@ -134,7 +142,10 @@ public class FinishAction implements MKTool {
             }
         }
 
-        // 4. 应用经验打分
+        // 4. select_next
+        selectedNext = arguments.path("select_next").asInt(-1);
+
+        // 5. 应用经验打分
         if (memoryManager != null && !roundScores.isEmpty()) {
             for (ExpScore es : roundScores) {
                 memoryManager.applyScore(es.experienceId, es.score);

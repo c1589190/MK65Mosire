@@ -63,6 +63,17 @@ public class MKConfig {
     public static int MSG_AGGREGATE_PRIVATE_MIN = 1;
     public static int MSG_AGGREGATE_GROUP_MIN = 3;
 
+    // ========== 外源刺激 ==========
+    public static double STIMULUS_PRIVATE_WEIGHT = 0.7;
+    public static double STIMULUS_GROUP_WEIGHT = 0.5;
+    public static double STIMULUS_CONSOLE_WEIGHT = 0.8;
+    public static double STIMULUS_INTERNAL_WEIGHT = 0.3;
+    public static int STIMULUS_LENGTH_DIVISOR = 20;
+
+    // ========== 行动池权重 ==========
+    public static double POOL_WAITING_WEIGHT = 0.01;
+    public static double POOL_ENDOGENOUS_MARGIN = 0.01;
+
     // ========== 数据库 ==========
     public static String DB_URL = "jdbc:sqlite:mk65_motivation.db";
     public static boolean DEBUG_AUTO_ENABLE = false;
@@ -131,6 +142,15 @@ public class MKConfig {
         MSG_AGGREGATE_MAX_MESSAGES = getInt(props, "msg.aggregateMaxMessages", MSG_AGGREGATE_MAX_MESSAGES);
         MSG_AGGREGATE_PRIVATE_MIN = getInt(props, "msg.aggregatePrivateMin", MSG_AGGREGATE_PRIVATE_MIN);
         MSG_AGGREGATE_GROUP_MIN = getInt(props, "msg.aggregateGroupMin", MSG_AGGREGATE_GROUP_MIN);
+
+        STIMULUS_PRIVATE_WEIGHT = getDouble(props, "stimulus.privateWeight", STIMULUS_PRIVATE_WEIGHT);
+        STIMULUS_GROUP_WEIGHT = getDouble(props, "stimulus.groupWeight", STIMULUS_GROUP_WEIGHT);
+        STIMULUS_CONSOLE_WEIGHT = getDouble(props, "stimulus.consoleWeight", STIMULUS_CONSOLE_WEIGHT);
+        STIMULUS_INTERNAL_WEIGHT = getDouble(props, "stimulus.internalWeight", STIMULUS_INTERNAL_WEIGHT);
+        STIMULUS_LENGTH_DIVISOR = getInt(props, "stimulus.lengthDivisor", STIMULUS_LENGTH_DIVISOR);
+
+        POOL_WAITING_WEIGHT = getDouble(props, "pool.waitingWeight", POOL_WAITING_WEIGHT);
+        POOL_ENDOGENOUS_MARGIN = getDouble(props, "pool.endogenousMargin", POOL_ENDOGENOUS_MARGIN);
 
         DB_URL = get(props, "db.url", DB_URL);
         DEBUG_AUTO_ENABLE = getBool(props, "debug.autoEnable", DEBUG_AUTO_ENABLE);
