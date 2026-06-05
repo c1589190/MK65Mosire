@@ -1,55 +1,95 @@
 package com.mk65.core;
 
 import com.mk65.llm.LLMAdapter;
+import com.mk65.tokenizer.Tokenizer;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 /**
  * Process 编码器。
  *
- * 将 LLM 返回的 tool_calls 编码为行动 token 序列。
- * 只编码工具名和参数键。参数值不编码。
+ * 将 LLM 返回的 tool_calls 编码为行动 token 序列，分三类：
+ * 1. action:工具名    — 调了什么工具
+ * 2. param:参数键     — 用了什么参数
+ * 3. value:分词片段   — 具体说了什么话、搜了什么东西
  */
 public class ProcessEncoder {
 
+    private static final com.fasterxml.jackson.databind.ObjectMapper mapper =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     /**
      * 编码一轮 LLM 的工具调用。
-     *
-     * @param toolCalls LLM 返回的工具调用列表
-     * @return 行动 token 序列，如 ["action:fetch_web", "param:query", "action:send_message", "param:target", "param:messages"]
      */
     public static List<String> encode(List<LLMAdapter.ToolCall> toolCalls) {
         List<String> tokens = new ArrayList<>();
         if (toolCalls == null || toolCalls.isEmpty()) return tokens;
 
+        Tokenizer tokenizer = Tokenizer.getInstance();
+
         for (LLMAdapter.ToolCall tc : toolCalls) {
             tokens.add("action:" + tc.name());
 
-            // 提取参数键
             try {
-                com.fasterxml.jackson.databind.JsonNode args =
-                        new com.fasterxml.jackson.databind.ObjectMapper().readTree(tc.arguments());
-                java.util.Iterator<String> fieldNames = args.fieldNames();
+                com.fasterxml.jackson.databind.JsonNode args = mapper.readTree(tc.arguments());
+                Iterator<String> fieldNames = args.fieldNames();
                 while (fieldNames.hasNext()) {
-                    tokens.add("param:" + fieldNames.next());
+                    String key = fieldNames.next();
+                    tokens.add("param:" + key);
+
+                    // ★ 参数值分词
+                    com.fasterxml.jackson.databind.JsonNode val = args.get(key);
+                    List<String> valueTokens = extractValueTokens(val, tokenizer);
+                    for (String vt : valueTokens) {
+                        tokens.add("value:" + vt);
+                    }
                 }
             } catch (Exception e) {
-                // 解析失败不阻塞，至少已编码了action名
+                // JSON解析失败不阻塞
             }
         }
         return tokens;
     }
 
     /**
-     * 编码单个工具调用的文本记录（getTextRecord）。
-     * 用于从工具层面额外获取文本描述。
+     * 递归提取参数值中的所有文本片段并分词。
+     * 支持 string / array / object 三种 JSON 类型。
+     */
+    private static List<String> extractValueTokens(
+            com.fasterxml.jackson.databind.JsonNode node, Tokenizer tokenizer) {
+        List<String> result = new ArrayList<>();
+        if (node == null || node.isNull()) return result;
+
+        if (node.isTextual()) {
+            String text = node.asText();
+            if (!text.isBlank()) {
+                result.addAll(tokenizer.segment(text));
+            }
+        } else if (node.isArray()) {
+            for (com.fasterxml.jackson.databind.JsonNode item : node) {
+                result.addAll(extractValueTokens(item, tokenizer));
+            }
+        } else if (node.isObject()) {
+            // 对象的值继续递归，键忽略（键=param已经记录）
+            Iterator<String> fields = node.fieldNames();
+            while (fields.hasNext()) {
+                result.addAll(extractValueTokens(node.get(fields.next()), tokenizer));
+            }
+        }
+        // number/boolean 忽略 — 不产生有意义的文本token
+        return result;
+    }
+
+    /**
+     * 编码工具文本记录（getTextRecord）。
+     * 只提取工具名标记，具体内容已在 encode() 的 value 分词中覆盖。
      */
     public static List<String> encodeTextRecord(String textRecord) {
         List<String> tokens = new ArrayList<>();
         if (textRecord == null || textRecord.isBlank()) return tokens;
 
-        // 提取关键信息：工具名 + 操作类型
         String lower = textRecord.toLowerCase();
         if (lower.contains("fetch_web")) tokens.add("action:fetch_web");
         if (lower.contains("send_message")) tokens.add("action:send_message");
