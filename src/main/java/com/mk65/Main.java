@@ -155,10 +155,15 @@ public class Main {
                 napcat = new NapcatAdapter();
                 napcat.setMessageCallback((source, text) ->
                         loop.getActionPool().pushExternal(source, text));
-                napcat.start();
-                SendMessage.setNapcat(napcat);
-                com.mk65.tool.GetChatHistory.setNapcat(napcat);
-                log.info("[Main] NapcatQQ 适配器已启动");
+                try {
+                    napcat.start();
+                    SendMessage.setNapcat(napcat);
+                    com.mk65.tool.GetChatHistory.setNapcat(napcat);
+                    log.info("[Main] NapcatQQ 适配器已启动");
+                } catch (Exception e) {
+                    log.warn("[Main] NapcatQQ 连接失败 ({}), 纯控制台模式运行", e.getMessage());
+                    napcat = null;
+                }
             } catch (URISyntaxException e) {
                 log.error("[Main] NapcatQQ URL 配置错误，将以纯控制台模式运行", e);
             } catch (Exception e) {

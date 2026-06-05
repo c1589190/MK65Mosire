@@ -50,14 +50,17 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
     public void start() {
         try {
             connectBlocking();
+            connected = true;
             fetchSelfId();
-            log.info("[Napcat] ✅ 已连接: ws={} http={}",
-                    MKConfig.NAPCAT_WS_URL + ":" + MKConfig.NAPCAT_WS_PORT, httpBase);
+            log.info("[Napcat] ✅ 已连接: ws={}:{} http={}",
+                    MKConfig.NAPCAT_WS_URL, MKConfig.NAPCAT_WS_PORT, httpBase);
         } catch (InterruptedException e) {
-            log.error("[Napcat] 连接被中断", e);
+            connected = false;
+            log.warn("[Napcat] 连接被中断, 将以纯控制台模式运行");
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            log.error("[Napcat] 连接失败", e);
+            connected = false;
+            log.warn("[Napcat] 连接失败 ({}), 将以纯控制台模式运行", e.getMessage());
         }
     }
 
@@ -143,7 +146,12 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
 
     @Override
     public void onError(Exception ex) {
-        log.error("[Napcat] WS错误", ex);
+        if (ex instanceof java.net.ConnectException) {
+            log.warn("[Napcat] 无法连接 ({}), 纯控制台模式", ex.getMessage());
+        } else {
+            log.error("[Napcat] WS错误", ex);
+        }
+        connected = false;
     }
 
     // ── HTTP 辅助 ──
