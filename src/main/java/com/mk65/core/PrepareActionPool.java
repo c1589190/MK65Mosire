@@ -2,14 +2,14 @@ package com.mk65.core;
 
 import lombok.extern.slf4j.Slf4j;
 
+import com.mk65.config.MKConfig;
+
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Comparator;
-import java.util.concurrent.PriorityBlockingQueue;
-import java.util.concurrent.TimeUnit;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 准备行动池。
@@ -25,38 +25,113 @@ public class PrepareActionPool {
     private final AtomicLong sequence = new AtomicLong(0);
 
     private final PriorityBlockingQueue<PoolEntry> pool;
-    private final ReentrantLock lock = new ReentrantLock();
+    private final ScheduledExecutorService flushScheduler;
+    // 消息聚合桶: source → bucket
+    private final ConcurrentHashMap<String, MessageBucket> buckets = new ConcurrentHashMap<>();
+    // 冷却中的source: source → cooldown结束时间
+    private final ConcurrentHashMap<String, Long> cooldowns = new ConcurrentHashMap<>();
 
     private static final int DEFAULT_CAPACITY = 64;
 
     public PrepareActionPool() {
-        // 按 selectionScore 降序 → 同分按时序
         this.pool = new PriorityBlockingQueue<>(DEFAULT_CAPACITY,
                 (a, b) -> {
                     int c = Double.compare(b.selectionScore(), a.selectionScore());
                     if (c != 0) return c;
                     return Long.compare(a.sequenceId, b.sequenceId);
                 });
+        this.flushScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "Pool-Flusher");
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     // ==========================================
     // 入池
     // ==========================================
 
-    /** 来自外部适配器（QQ消息等） */
+    /** 来自外部适配器（QQ消息等）— 自动聚合同源消息 */
     public void pushExternal(String source, String rawText) {
+        // 检查冷却
+        Long cooldownUntil = cooldowns.get(source);
+        if (cooldownUntil != null && System.currentTimeMillis() < cooldownUntil) {
+            // 冷却中，丢弃（或加入下一个桶）
+            return;
+        }
+
+        synchronized (buckets) {
+            MessageBucket bucket = buckets.computeIfAbsent(source, k -> new MessageBucket(source));
+
+            bucket.messages.add(rawText);
+            bucket.lastActivity = System.currentTimeMillis();
+
+            int maxMsgs = source.startsWith("qq_group:") ? MKConfig.MSG_AGGREGATE_GROUP_MIN : MKConfig.MSG_AGGREGATE_PRIVATE_MIN;
+            int effectiveMax = Math.max(maxMsgs, 1);
+
+            // 攒够了→立即flush
+            if (bucket.messages.size() >= Math.max(effectiveMax, MKConfig.MSG_AGGREGATE_MAX_MESSAGES)) {
+                flushBucket(source);
+                return;
+            }
+
+            // 取消旧定时器，重新计时
+            if (bucket.flushTask != null) bucket.flushTask.cancel(false);
+            bucket.flushTask = flushScheduler.schedule(
+                    () -> flushBucket(source),
+                    MKConfig.MSG_AGGREGATE_WAIT_MS, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    /** 清空聚合桶，拼接所有消息为一条ActionInput推入池 */
+    private void flushBucket(String source) {
+        MessageBucket bucket;
+        synchronized (buckets) {
+            bucket = buckets.remove(source);
+            if (bucket == null || bucket.messages.isEmpty()) return;
+            // 设置冷却
+            cooldowns.put(source, System.currentTimeMillis() + MKConfig.MSG_AGGREGATE_COOLDOWN_MS);
+        }
+
         String now = LocalDateTime.now().format(TIME_FMT);
+        String combined = String.join("\n", bucket.messages);
         String actionText;
         if (source.startsWith("qq_group:")) {
-            actionText = String.format("[%s] QQ群聊(%s): %s", now,
-                    source.substring("qq_group:".length()), rawText);
+            actionText = String.format("[%s] QQ群聊(%s) 聚合%d条: %s", now,
+                    source.substring("qq_group:".length()), bucket.messages.size(), combined);
         } else if (source.startsWith("qqid:")) {
-            actionText = String.format("[%s] QQ私聊(%s): %s", now,
-                    source.substring("qqid:".length()), rawText);
+            actionText = String.format("[%s] QQ私聊(%s) 聚合%d条: %s", now,
+                    source.substring("qqid:".length()), bucket.messages.size(), combined);
         } else {
-            actionText = String.format("[%s] 来源(%s): %s", now, source, rawText);
+            actionText = String.format("[%s] 来源(%s) 聚合%d条: %s", now, source, bucket.messages.size(), combined);
         }
-        push(new ActionInput(actionText, source, rawText, 0.5));
+
+        double pri = source.startsWith("qqid:") ? 0.7 : 0.5;
+        push(new ActionInput(actionText, source, combined, pri));
+        log.info("[Pool] 📦 消息聚合flush: source={}, {}条消息→{}chars ActionText, pri={}",
+                source, bucket.messages.size(), actionText.length(), pri);
+    }
+
+    /** 关闭时清空所有桶 */
+    public void flushAll() {
+        synchronized (buckets) {
+            for (String source : new ArrayList<>(buckets.keySet())) {
+                flushBucket(source);
+            }
+        }
+        buckets.clear();
+    }
+
+    private static class MessageBucket {
+        final String source;
+        final List<String> messages = new ArrayList<>();
+        long lastActivity;
+        ScheduledFuture<?> flushTask;
+
+        MessageBucket(String source) {
+            this.source = source;
+            this.lastActivity = System.currentTimeMillis();
+        }
     }
 
     /** 来自控制台 */
@@ -120,7 +195,15 @@ public class PrepareActionPool {
     /** 清空池 */
     public void clear() {
         pool.clear();
+        buckets.clear();
+        cooldowns.clear();
         sequence.set(0);
+    }
+
+    public void shutdown() {
+        flushAll();
+        flushScheduler.shutdown();
+        pool.clear();
     }
 
     // ==========================================

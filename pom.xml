@@ -47,6 +47,13 @@
             <version>2.17.1</version>
         </dependency>
 
+        <!-- FreeMarker 模板引擎 -->
+        <dependency>
+            <groupId>org.freemarker</groupId>
+            <artifactId>freemarker</artifactId>
+            <version>2.3.33</version>
+        </dependency>
+
         <!-- WebSocket (NapcatQQ) -->
         <dependency>
             <groupId>org.java-websocket</groupId>

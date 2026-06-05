@@ -59,11 +59,29 @@ public class Main {
             # ---------- 工作区 ----------
             workspace.dir=workspace
 
+            # ---------- 全局上下文缓存 ----------
+            llm.context.maxMessages=42
+            llm.context.keepRatio=0.30
+            llm.context.digestMaxChars=3000
+
             # ---------- 动机模型 ----------
             motivation.conflictThreshold=0.5
             motivation.noveltyMinCount=3
             motivation.decayHalfLife=500
             motivation.vacuumThreshold=1
+
+            # ---------- 经验系统 ----------
+            memory.autoRecallTopN=3
+            memory.recallMaxResults=10
+            memory.autoRecallScanLimit=500
+            memory.helpfulScaleFactor=0.5
+
+            # ---------- 消息聚合 ----------
+            msg.aggregateWaitMs=3000
+            msg.aggregateCooldownMs=5000
+            msg.aggregateMaxMessages=5
+            msg.aggregatePrivateMin=1
+            msg.aggregateGroupMin=3
 
             # ---------- 认知循环 ----------
             core.tickMs=2000
@@ -71,6 +89,9 @@ public class Main {
 
             # ---------- 数据库 ----------
             db.url=jdbc:sqlite:mk65_motivation.db
+
+            # ---------- 调试 ----------
+            debug.autoEnable=false
             """;
 
         try {
@@ -136,7 +157,13 @@ public class Main {
             System.out.println("└───────────────────────────────────────");
         });
 
-        // 4. 启动认知循环
+        // 4. 自动开启DEBUG（如果配置了）
+        if (MKConfig.DEBUG_AUTO_ENABLE) {
+            com.mk65.core.MK65Debug.enable();
+            log.info("[Main] DEBUG日志已自动开启");
+        }
+
+        // 5. 启动认知循环
         loop.start();
 
         // 5. 控制台交互

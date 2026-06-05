@@ -8,10 +8,14 @@ import com.mk65.core.PrepareActionPool.ActionInput;
 import com.mk65.llm.LLMAdapter;
 import com.mk65.llm.LLMAdapter.LLMResult;
 import com.mk65.llm.LLMAdapter.ToolCall;
+import com.mk65.config.MKConfig;
 import com.mk65.motivation.ConflictDetector;
 import com.mk65.motivation.MemoryManager;
 import com.mk65.motivation.MotivationMatrix;
 import com.mk65.motivation.MotivationReport;
+import freemarker.template.Configuration;
+import freemarker.template.Template;
+import freemarker.template.TemplateExceptionHandler;
 import com.mk65.tokenizer.Tokenizer;
 import com.mk65.tool.MKTool;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +52,7 @@ public class ActionLoop {
     private final AtomicBoolean isProcessing;
     private final AtomicInteger roundCount;
     private String systemPrompt;
+    private final Configuration freemarker;
 
     private ActionLoop() {
         this.actionPool = new PrepareActionPool();
@@ -69,6 +74,16 @@ public class ActionLoop {
         });
         this.isProcessing = new AtomicBoolean(false);
         this.roundCount = new AtomicInteger(0);
+
+        // FreeMarker
+        this.freemarker = new Configuration(Configuration.VERSION_2_3_33);
+        try {
+            freemarker.setDirectoryForTemplateLoading(new java.io.File("prompts"));
+            freemarker.setDefaultEncoding("UTF-8");
+            freemarker.setTemplateExceptionHandler(TemplateExceptionHandler.RETHROW_HANDLER);
+        } catch (Exception e) {
+            log.warn("[ActionLoop] FreeMarker初始化失败，使用默认提示词: {}", e.getMessage());
+        }
 
         initToolbox();
         loadSystemPrompt();
@@ -151,6 +166,7 @@ public class ActionLoop {
 
     public void stop() {
         log.info("[ActionLoop] ⏹️ 正在停止... (总轮次: {})", roundCount.get());
+        actionPool.shutdown();
         scheduler.shutdown();
         executor.shutdown();
         try {
@@ -218,7 +234,7 @@ public class ActionLoop {
 
             // ★ 自动经验检索
             MemoryManager mem = MemoryManager.getInstance();
-            java.util.List<MemoryManager.ExpMatch> autoMemories = mem.autoRecall(inputTokens, 3);
+            java.util.List<MemoryManager.ExpMatch> autoMemories = mem.autoRecall(inputTokens, MKConfig.MEMORY_AUTO_RECALL_TOPN);
             MK65Debug.autoMemories(autoMemories);
 
             boolean hasHistory = !dist.isEmpty() || !autoMemories.isEmpty();
@@ -344,59 +360,40 @@ public class ActionLoop {
     // ==========================================
 
     private void loadSystemPrompt() {
+        // 尝试加载FreeMarker模板，失败则用硬编码fallback
         try {
-            java.nio.file.Path promptFile = java.nio.file.Path.of("prompts", "SYSTEM.md");
-            if (java.nio.file.Files.exists(promptFile)) {
-                this.systemPrompt = java.nio.file.Files.readString(promptFile);
-            } else {
-                this.systemPrompt = buildDefaultSystemPrompt();
-            }
+            Template tmpl = freemarker.getTemplate("SYSTEM.md.ftl");
+            java.io.StringWriter sw = new java.io.StringWriter();
+            tmpl.process(Map.of(), sw);
+            this.systemPrompt = sw.toString();
         } catch (Exception e) {
-            this.systemPrompt = buildDefaultSystemPrompt();
+            log.warn("[ActionLoop] SYSTEM.md.ftl 加载失败，使用内置默认: {}", e.getMessage());
+            this.systemPrompt = "你是运行在MK65认知架构中的AI Agent。实事求是。逻辑完备。行动规范。\\n输出JSON格式: {\\\"thoughts\\\":..., \\\"tool_calls\\\":[...]}\\n★★★每轮必须调用finish_action结算。";
         }
-        // ★ 注入 LLM 全局缓存（前缀不变 → API层缓存命中）
         llm.setSystemPrompt(systemPrompt);
-        log.info("[ActionLoop] 系统指令已加载 ({}chars) 并注入LLM全局缓存", systemPrompt.length());
-    }
-
-    private String buildDefaultSystemPrompt() {
-        return """
-                你是一个运行在 MK65 认知架构中的 AI Agent。
-
-                每轮你会收到：
-                1. 当前需要处理的信息（ActionText）
-                2. 动机报告 — 白箱统计系统从你的实践历史中自动生成的注意力引导数据
-
-                动机报告说明：
-                - 综合行动倾向：当前输入中各 token 在历史上指向的行动方向
-                - 输入内部冲突：输入中两个 token 的行动方向互相矛盾
-                - 新异 token：首次出现的 token，无历史参考
-
-                重要：动机报告是统计参考，不是命令。你可以选择遵循它，也可以基于你的推理选择不同的行动方案。
-
-                你的输出应为 JSON 格式：
-                {
-                  "thoughts": "你的推理过程",
-                  "tool_calls": [...]
-                }
-
-                ★★★ 每轮必须调用 finish_action 作为最后一个工具 ★★★
-                即使没有任何实质操作，也要调用 finish_action 结算本轮。
-                finish_action 参数：
-                - thoughts: 本轮推理过程（50-300字）
-                - experience_scoring: 对动机报告中【关联历史经验】的评价(1/0/-1)
-                - next_actions: 后续任务列表（至少1项，如"继续监听消息"）
-
-                实是求是。逻辑完备。行动规范。
-                """;
+        log.info("[ActionLoop] 系统指令已加载 ({}chars)", systemPrompt.length());
     }
 
     private String buildUserMessage(String actionText, MotivationReport report) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("【当前输入】\n");
-        sb.append(actionText).append("\n\n");
-        sb.append(report.toPromptBlock());
-        return sb.toString();
+        try {
+            Template tmpl = freemarker.getTemplate("USER.md.ftl");
+            java.io.StringWriter sw = new java.io.StringWriter();
+            Map<String, Object> data = new java.util.HashMap<>();
+            data.put("actionText", actionText);
+            data.put("hasHistory", report.hasHistory());
+            data.put("overallVotes", report.getOverallVotes());
+            // perTokenDist: Map<String, Map<String, Double>> → FreeMarker可遍历
+            // 但Java的Map需要特殊适配。改用MotivationReport暴露getter。
+            data.put("perTokenDist", report.getPerTokenDist());
+            data.put("autoMemories", report.getAutoMemories());
+            data.put("conflicts", report.getConflicts());
+            data.put("novelTokens", report.getNovelTokens());
+            tmpl.process(data, sw);
+            return sw.toString();
+        } catch (Exception e) {
+            // fallback: 用MotivationReport的toPromptBlock
+            return "【当前输入】\n" + actionText + "\n\n" + report.toPromptBlock();
+        }
     }
 
     private ArrayNode buildToolsArray() {

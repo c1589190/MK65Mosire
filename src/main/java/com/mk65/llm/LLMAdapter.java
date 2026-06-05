@@ -31,9 +31,11 @@ public class LLMAdapter {
 
     /** 全局消息列表 — system [+ 压缩摘要] + 最近N轮对话 */
     private final List<JsonNode> globalMessages = new ArrayList<>();
-    private static final int MAX_MESSAGES = 42;  // 超过此值触发压缩
-    private static final double KEEP_RATIO = 0.30; // 压缩时保留后30%原样
     private String systemPromptText = "";
+
+    private int maxMessages() { return MKConfig.LLM_CONTEXT_MAX_MESSAGES; }
+    private double keepRatio() { return MKConfig.LLM_CONTEXT_KEEP_RATIO; }
+    private int digestMaxChars() { return MKConfig.LLM_CONTEXT_DIGEST_MAX_CHARS; }
 
     public LLMAdapter() {
         this.apiBase = MKConfig.BRAIN_API_BASE;
@@ -263,7 +265,7 @@ public class LLMAdapter {
      * 后续新消息照常追加。
      */
     private void compressContext() {
-        if (globalMessages.size() <= MAX_MESSAGES) return;
+        if (globalMessages.size() <= maxMessages()) return;
 
         // 1. 先收集已有摘要（如果索引1是摘要消息）
         String oldDigest = "";
@@ -275,7 +277,7 @@ public class LLMAdapter {
 
         // 2. 取后30%（最近的），跳过system和已有摘要
         int nonSystemCount = globalMessages.size() - 1 - (oldDigest.isEmpty() ? 0 : 1);
-        int keepCount = Math.max(2, (int) (nonSystemCount * KEEP_RATIO));
+        int keepCount = Math.max(2, (int) (nonSystemCount * keepRatio()));
         int splitIndex = globalMessages.size() - keepCount;
 
         // 3. 把后30%的消息压缩成一段文本
@@ -302,7 +304,7 @@ public class LLMAdapter {
         }
 
         String digest = sb.toString().trim();
-        if (digest.length() > 3000) digest = digest.substring(0, 3000) + "...[截断]";
+        if (digest.length() > digestMaxChars()) digest = digest.substring(0, digestMaxChars()) + "...[截断]";
 
         // 4. 重建：system + 压缩摘要user消息。前70%直接扔掉。
         globalMessages.clear();

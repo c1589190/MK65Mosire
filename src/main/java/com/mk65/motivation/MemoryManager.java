@@ -2,6 +2,7 @@ package com.mk65.motivation;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mk65.config.MKConfig;
 import com.mk65.config.MKDB;
 import lombok.extern.slf4j.Slf4j;
 
@@ -82,7 +83,8 @@ public class MemoryManager {
         if (currentTokens == null || currentTokens.isEmpty()) return List.of();
         Set<String> currentSet = new HashSet<>(currentTokens);
 
-        String sql = "SELECT id, round_number, action_text, source, thoughts, tool_names, tool_results, input_tokens, helpful_count FROM Experiences ORDER BY id DESC LIMIT 500";
+        String sql = "SELECT id, round_number, action_text, source, thoughts, tool_names, tool_results, input_tokens, helpful_count FROM Experiences ORDER BY id DESC LIMIT "
+                + MKConfig.MEMORY_AUTO_RECALL_SCAN_LIMIT;
 
         List<ExpMatch> matches = new ArrayList<>();
 
@@ -107,7 +109,7 @@ public class MemoryManager {
                         rs.getString("thoughts"),
                         fromJsonArray(rs.getString("tool_names")),
                         fromJsonArray(rs.getString("tool_results")),
-                        jaccard * (1.0 + Math.tanh(helpful * 0.5))  // 有帮助的经验加权
+                        jaccard * (1.0 + Math.tanh(helpful * MKConfig.MEMORY_HELPFUL_SCALE))  // 有帮助的经验加权
                 ));
             }
         } catch (SQLException e) {

@@ -43,8 +43,27 @@ public class MKConfig {
     public static long CORE_TICK_MS = 2000;
     public static int CORE_ROUND_TIMEOUT_SEC = 180;
 
+    // ========== 全局上下文 ==========
+    public static int LLM_CONTEXT_MAX_MESSAGES = 42;
+    public static double LLM_CONTEXT_KEEP_RATIO = 0.30;
+    public static int LLM_CONTEXT_DIGEST_MAX_CHARS = 3000;
+
+    // ========== 经验系统 ==========
+    public static int MEMORY_AUTO_RECALL_TOPN = 3;
+    public static int MEMORY_RECALL_MAX_RESULTS = 10;
+    public static int MEMORY_AUTO_RECALL_SCAN_LIMIT = 500;
+    public static double MEMORY_HELPFUL_SCALE = 0.5;
+
+    // ========== 消息聚合 ==========
+    public static long MSG_AGGREGATE_WAIT_MS = 3000;
+    public static long MSG_AGGREGATE_COOLDOWN_MS = 5000;
+    public static int MSG_AGGREGATE_MAX_MESSAGES = 5;
+    public static int MSG_AGGREGATE_PRIVATE_MIN = 1;
+    public static int MSG_AGGREGATE_GROUP_MIN = 3;
+
     // ========== 数据库 ==========
     public static String DB_URL = "jdbc:sqlite:mk65_motivation.db";
+    public static boolean DEBUG_AUTO_ENABLE = false;
 
     static {
         Properties props = new Properties();
@@ -94,7 +113,23 @@ public class MKConfig {
         CORE_TICK_MS = getLong(props, "core.tickMs", CORE_TICK_MS);
         CORE_ROUND_TIMEOUT_SEC = getInt(props, "core.roundTimeoutSec", CORE_ROUND_TIMEOUT_SEC);
 
+        LLM_CONTEXT_MAX_MESSAGES = getInt(props, "llm.context.maxMessages", LLM_CONTEXT_MAX_MESSAGES);
+        LLM_CONTEXT_KEEP_RATIO = getDouble(props, "llm.context.keepRatio", LLM_CONTEXT_KEEP_RATIO);
+        LLM_CONTEXT_DIGEST_MAX_CHARS = getInt(props, "llm.context.digestMaxChars", LLM_CONTEXT_DIGEST_MAX_CHARS);
+
+        MEMORY_AUTO_RECALL_TOPN = getInt(props, "memory.autoRecallTopN", MEMORY_AUTO_RECALL_TOPN);
+        MEMORY_RECALL_MAX_RESULTS = getInt(props, "memory.recallMaxResults", MEMORY_RECALL_MAX_RESULTS);
+        MEMORY_AUTO_RECALL_SCAN_LIMIT = getInt(props, "memory.autoRecallScanLimit", MEMORY_AUTO_RECALL_SCAN_LIMIT);
+        MEMORY_HELPFUL_SCALE = getDouble(props, "memory.helpfulScaleFactor", MEMORY_HELPFUL_SCALE);
+
+        MSG_AGGREGATE_WAIT_MS = getLong(props, "msg.aggregateWaitMs", MSG_AGGREGATE_WAIT_MS);
+        MSG_AGGREGATE_COOLDOWN_MS = getLong(props, "msg.aggregateCooldownMs", MSG_AGGREGATE_COOLDOWN_MS);
+        MSG_AGGREGATE_MAX_MESSAGES = getInt(props, "msg.aggregateMaxMessages", MSG_AGGREGATE_MAX_MESSAGES);
+        MSG_AGGREGATE_PRIVATE_MIN = getInt(props, "msg.aggregatePrivateMin", MSG_AGGREGATE_PRIVATE_MIN);
+        MSG_AGGREGATE_GROUP_MIN = getInt(props, "msg.aggregateGroupMin", MSG_AGGREGATE_GROUP_MIN);
+
         DB_URL = get(props, "db.url", DB_URL);
+        DEBUG_AUTO_ENABLE = getBool(props, "debug.autoEnable", DEBUG_AUTO_ENABLE);
     }
 
     private static void overrideFromEnv(Properties props) {

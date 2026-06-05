@@ -119,7 +119,9 @@ public class MotivationReport {
 
     // getters
     public Map<String, Double> getOverallVotes() { return overallVotes; }
+    public Map<String, Map<String, Double>> getPerTokenDist() { return perTokenDistribution; }
     public List<ConflictDetector.ConflictPair> getConflicts() { return conflicts; }
     public Set<String> getNovelTokens() { return novelTokens; }
+    public List<MemoryManager.ExpMatch> getAutoMemories() { return autoMemories; }
     public boolean hasHistory() { return hasHistory; }
 }
