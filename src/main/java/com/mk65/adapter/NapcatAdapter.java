@@ -120,26 +120,36 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
                 return;
             }
 
-            String source;
-            String senderName = msg.path("sender").path("nickname").asText("");
-            if (senderName.isBlank()) senderName = String.valueOf(msg.path("sender").path("user_id").asLong());
+            // 提取发送者信息
+            JsonNode senderNode = msg.path("sender");
+            long senderId = senderNode.path("user_id").asLong();
+            String nickname = senderNode.path("nickname").asText("");
+            String card = senderNode.path("card").asText("");
+            String senderName = !card.isBlank() ? card : (!nickname.isBlank() ? nickname : String.valueOf(senderId));
 
+            // 提取 @提及 信息
+            String atInfo = extractAtInfo(msg.path("message"));
+
+            String source;
             if ("group".equals(messageType)) {
                 long groupId = msg.path("group_id").asLong();
                 source = "qq_group:" + groupId;
-                log.info("[Napcat] 📨 群聊消息 | 群:{} | 发送者:{} | {}chars",
-                        groupId, senderName, text.length());
+                // ★ 构造带来源标识的完整文本
+                text = String.format("[%s(%d) 在群聊(%d)中说]: %s%s",
+                        senderName, senderId, groupId,
+                        atInfo.isEmpty() ? "" : "(" + atInfo + ") ", text);
+                log.info("[Napcat] 📨 群聊消息 | 群:{} | 发送者:{}({}) | {}chars",
+                        groupId, senderName, senderId, text.length());
             } else if ("private".equals(messageType)) {
                 long userId = msg.path("user_id").asLong();
                 source = "qqid:" + userId;
+                text = String.format("[%s(%d) 在私聊中说]: %s",
+                        senderName, senderId, text);
                 log.info("[Napcat] 📨 私聊消息 | 发送者:{}({}) | {}chars",
                         senderName, userId, text.length());
             } else {
                 return;
             }
-
-            log.info("[Napcat] 📨 收到消息 | postType={} messageType={} textLen={}",
-                    postType, messageType, text.length());
 
             // ★ 自动拉取历史记录并拼入消息
             String historyText = fetchRecentHistory(source);
@@ -312,6 +322,20 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
     }
 
     /** 从Napcat消息JSON中提取纯文本 */
+    /** 从消息JSON中提取@提及信息 */
+    private String extractAtInfo(JsonNode messageNode) {
+        if (!messageNode.isArray()) return "";
+        java.util.List<String> atTargets = new java.util.ArrayList<>();
+        for (JsonNode seg : messageNode) {
+            if ("at".equals(seg.path("type").asText(""))) {
+                String qq = seg.path("data").path("qq").asText("");
+                if (!qq.isBlank()) atTargets.add(qq.equals(selfId) ? "自己" : qq);
+            }
+        }
+        if (atTargets.isEmpty()) return "";
+        return "@" + String.join(", @", atTargets);
+    }
+
     private static String extractText(JsonNode messageNode) {
         if (messageNode.isTextual()) return messageNode.asText();
         if (messageNode.isArray()) {
