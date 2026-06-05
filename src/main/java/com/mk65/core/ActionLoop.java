@@ -431,7 +431,9 @@ public class ActionLoop {
         try {
             Template tmpl = freemarker.getTemplate("SYSTEM.md.ftl");
             java.io.StringWriter sw = new java.io.StringWriter();
-            tmpl.process(Map.of(), sw);
+            Map<String, Object> sysData = new java.util.HashMap<>();
+            sysData.put("selfId", com.mk65.Main.getSelfId());
+            tmpl.process(sysData, sw);
             this.systemPrompt = sw.toString();
         } catch (Exception e) {
             log.warn("[ActionLoop] SYSTEM.md.ftl 加载失败，使用内置默认: {}", e.getMessage());

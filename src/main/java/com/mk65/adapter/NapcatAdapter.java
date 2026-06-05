@@ -123,9 +123,16 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
             // 提取发送者信息
             JsonNode senderNode = msg.path("sender");
             long senderId = senderNode.path("user_id").asLong();
+            boolean isSelf = !selfId.isBlank() && String.valueOf(senderId).equals(selfId);
+
             String nickname = senderNode.path("nickname").asText("");
             String card = senderNode.path("card").asText("");
-            String senderName = !card.isBlank() ? card : (!nickname.isBlank() ? nickname : String.valueOf(senderId));
+            String senderName;
+            if (isSelf) {
+                senderName = "[自己]";
+            } else {
+                senderName = !card.isBlank() ? card : (!nickname.isBlank() ? nickname : String.valueOf(senderId));
+            }
 
             // 提取 @提及 信息
             String atInfo = extractAtInfo(msg.path("message"));

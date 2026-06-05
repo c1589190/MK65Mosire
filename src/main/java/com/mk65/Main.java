@@ -25,6 +25,10 @@ public class Main {
     private static volatile boolean running = true;
     private static NapcatAdapter napcat;
 
+    public static String getSelfId() {
+        return napcat != null ? napcat.getSelfId() : "";
+    }
+
     /**
      * 首次运行时，如果当前目录没有 application.properties，则生成模板。
      */
