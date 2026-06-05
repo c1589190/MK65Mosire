@@ -6,3 +6,7 @@ logs/
 workspace/
 .idea/
 *.iml
+application.properties
+dependency-reduced-pom.xml
+test/*.jar
+test/*.jar:Zone.Identifier

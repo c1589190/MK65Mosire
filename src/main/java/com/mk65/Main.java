@@ -25,12 +25,86 @@ public class Main {
     private static volatile boolean running = true;
     private static NapcatAdapter napcat;
 
+    /**
+     * 首次运行时，如果当前目录没有 application.properties，则生成模板。
+     */
+    private static void ensureConfigTemplate() {
+        java.nio.file.Path configPath = java.nio.file.Path.of(CONFIG_FILE);
+        if (java.nio.file.Files.exists(configPath)) return;
+
+        String template = """
+            # ==========================================
+            # MK65Mosire 配置文件
+            # 由首次运行自动生成，请填入你的配置后重新启动
+            # ==========================================
+
+            # ---------- LLM 大脑模型 ----------
+            llm.brain.apiBase=http://127.0.0.1:3000/v1
+            llm.brain.apiKey=
+            llm.brain.chatModel=deepseek-v4-flash-max
+            llm.brain.temperature=0.6
+            llm.brain.maxTokens=65535
+            llm.brain.stream=true
+
+            # ---------- NapcatQQ ----------
+            napcat.wsUrl=127.0.0.1
+            napcat.wsPort=3001
+            napcat.httpUrl=http://127.0.0.1:3000
+            napcat.token=
+
+            # ---------- 搜索 ----------
+            search.braveApiKey=
+            search.metasoApiKey=
+
+            # ---------- 工作区 ----------
+            workspace.dir=workspace
+
+            # ---------- 动机模型 ----------
+            motivation.conflictThreshold=0.5
+            motivation.noveltyMinCount=3
+            motivation.decayHalfLife=500
+            motivation.vacuumThreshold=1
+
+            # ---------- 认知循环 ----------
+            core.tickMs=2000
+            core.roundTimeoutSec=180
+
+            # ---------- 数据库 ----------
+            db.url=jdbc:sqlite:mk65_motivation.db
+            """;
+
+        try {
+            java.nio.file.Files.writeString(configPath, template);
+            System.out.println();
+            System.out.println("📄 已生成配置模板: " + configPath.toAbsolutePath());
+            System.out.println("   请编辑此文件，至少填入 llm.brain.apiKey 后重新启动。");
+            System.out.println();
+        } catch (Exception e) {
+            System.err.println("❌ 无法生成配置文件: " + e.getMessage());
+        }
+    }
+
+    private static final String CONFIG_FILE = "application.properties";
+
     public static void main(String[] args) {
+        // 0. 首次运行：生成配置模板
+        ensureConfigTemplate();
+
         log.info("╔══════════════════════════════════════╗");
         log.info("║       MK65Mosire Alpha 1.0.0         ║");
         log.info("║   白箱动机模型驱动的 AI Agent 框架     ║");
         log.info("╚══════════════════════════════════════╝");
         log.info("工作目录: {}", System.getProperty("user.dir"));
+
+        // 0.5. 检查是否已配置
+        if (MKConfig.BRAIN_API_KEY == null || MKConfig.BRAIN_API_KEY.isBlank()) {
+            System.out.println();
+            System.out.println("⚠️  llm.brain.apiKey 未配置！");
+            System.out.println("   请编辑当前目录下的 " + CONFIG_FILE + "，填入你的 API Key 后重新启动。");
+            System.out.println();
+            System.exit(1);
+        }
+
         log.info("数据库: {}", MKConfig.DB_URL);
 
         // 1. 初始化 ActionLoop（会自动初始化工具箱、LLM适配器、动机模型）
