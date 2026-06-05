@@ -234,37 +234,34 @@ public class LLMAdapter {
     /**
      * 压缩全局消息列表。
      *
-     * 超限时：保留后 KEEP_RATIO(30%) 的消息原样不动，
-     * 把前 70% 的消息压缩成一段摘要，和已有摘要合并，
-     * 作为 user 消息塞在 system prompt 之后。
+     * 超限时：前70%扔掉。后30%原样保留，但把它们压缩成一段文本，
+     * 塞进 system prompt 后面的一个 user 消息里。
+     * 后续新消息照常追加。
      */
     private void compressContext() {
         if (globalMessages.size() <= MAX_MESSAGES) return;
 
-        // 1. 收集旧摘要（如果索引1是摘要消息）
+        // 1. 先收集已有摘要（如果索引1是摘要消息）
         String oldDigest = "";
-        int digestAt = -1;
         if (globalMessages.size() > 1
                 && "user".equals(globalMessages.get(1).path("role").asText(""))
                 && globalMessages.get(1).path("content").asText("").startsWith("[上下文摘要]")) {
             oldDigest = globalMessages.get(1).path("content").asText("");
-            digestAt = 1;
         }
 
-        // 2. 分割：后 30% 保留，前 70%（system+摘要之后的）压缩
-        int keepCount = Math.max(1, (int) ((globalMessages.size() - 1) * KEEP_RATIO));
+        // 2. 取后30%（最近的），跳过system和已有摘要
+        int nonSystemCount = globalMessages.size() - 1 - (oldDigest.isEmpty() ? 0 : 1);
+        int keepCount = Math.max(2, (int) (nonSystemCount * KEEP_RATIO));
         int splitIndex = globalMessages.size() - keepCount;
-        if (splitIndex <= 1) splitIndex = 2; // 至少保留 system + 一轮
 
-        // 3. 扫描要压缩的消息，生成摘要
-        StringBuilder newDigest = new StringBuilder(oldDigest);
-        if (!oldDigest.isBlank()) newDigest.append("\n---\n");
-        newDigest.append("[最近活动 ").append(globalMessages.size() - splitIndex - keepCount + 1)
-                .append("条消息的压缩]\n");
+        // 3. 把后30%的消息压缩成一段文本
+        StringBuilder sb = new StringBuilder();
+        if (!oldDigest.isBlank()) {
+            sb.append(oldDigest).append("\n---\n");
+        }
+        sb.append("[最近 ").append(keepCount).append(" 条消息的压缩]\n");
 
-        int start = digestAt > 0 ? digestAt + 1 : 1; // 跳过system和已有摘要
-        int end = splitIndex;
-        for (int i = start; i < end; i++) {
+        for (int i = splitIndex; i < globalMessages.size(); i++) {
             JsonNode msg = globalMessages.get(i);
             String role = msg.path("role").asText("");
             String content = msg.path("content").asText("");
@@ -273,26 +270,17 @@ public class LLMAdapter {
             if ("tool".equals(role)) {
                 String name = msg.path("name").asText("");
                 String snip = content.length() > 80 ? content.substring(0, 80) + "..." : content;
-                newDigest.append("  [").append(name).append("] ").append(snip.replace("\n", " ")).append("\n");
+                sb.append("  [").append(name).append("] ").append(snip.replace("\n", " ")).append("\n");
             } else {
                 String snip = content.length() > 150 ? content.substring(0, 150) + "..." : content;
-                newDigest.append("  [").append(role).append("] ").append(snip.replace("\n", " ")).append("\n");
+                sb.append("  [").append(role).append("] ").append(snip.replace("\n", " ")).append("\n");
             }
         }
 
-        // 4. 截断摘要
-        String digest = newDigest.toString().trim();
-        if (digest.length() > 3000) {
-            digest = digest.substring(0, 3000) + "...[截断]";
-        }
+        String digest = sb.toString().trim();
+        if (digest.length() > 3000) digest = digest.substring(0, 3000) + "...[截断]";
 
-        // 5. 提取保留的消息（后30%）
-        List<JsonNode> keep = new ArrayList<>();
-        for (int i = splitIndex; i < globalMessages.size(); i++) {
-            keep.add(globalMessages.get(i));
-        }
-
-        // 6. 重建列表
+        // 4. 重建：system + 压缩摘要user消息。前70%直接扔掉。
         globalMessages.clear();
 
         ObjectNode sys = mapper.createObjectNode();
@@ -305,10 +293,8 @@ public class LLMAdapter {
         dm.put("content", "[上下文摘要] 以下是之前对话的压缩记录：\n\n" + digest);
         globalMessages.add(dm);
 
-        globalMessages.addAll(keep);
-
-        log.info("[LLM] 🔄 上下文压缩: {}→{}条 (摘要{}chars, 保留{}条)",
-                end - start + keep.size() + 2, globalMessages.size(), digest.length(), keep.size());
+        log.info("[LLM] 🔄 上下文压缩完成: 前70%丢弃, 后30%压缩为{}chars摘要, 当前列表={}条",
+                digest.length(), globalMessages.size());
     }
 
     // ==========================================
