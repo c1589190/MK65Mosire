@@ -36,6 +36,7 @@ public class LLMAdapter {
     private int maxMessages() { return MKConfig.LLM_CONTEXT_MAX_MESSAGES; }
     private double keepRatio() { return MKConfig.LLM_CONTEXT_KEEP_RATIO; }
     private int digestMaxChars() { return MKConfig.LLM_CONTEXT_DIGEST_MAX_CHARS; }
+    private static final int TOKEN_LIMIT_CHARS = 800_000; // ~1M token 的安全线
 
     public LLMAdapter() {
         this.apiBase = MKConfig.BRAIN_API_BASE;
@@ -85,42 +86,55 @@ public class LLMAdapter {
      * @return LLMResult
      */
     public LLMResult chat(String userMessage, ArrayNode tools) {
-        // 追加用户消息
+        // 先创建user消息（暂时不入globalMessages）
         ObjectNode userMsg = mapper.createObjectNode();
         userMsg.put("role", "user");
         userMsg.put("content", userMessage);
-        globalMessages.add(userMsg);
 
-        // 超限压缩：前70% → 摘要user消息，后30%原样保留
+        // ★ 合并：如果已有摘要user消息（索引1），新消息追到摘要后面
+        if (globalMessages.size() > 1
+                && "user".equals(globalMessages.get(1).path("role").asText(""))
+                && globalMessages.get(1).path("content").asText("").startsWith("[上下文摘要]")) {
+            String merged = globalMessages.get(1).path("content").asText("")
+                    + "\n\n---\n\n【当前输入】\n" + userMessage;
+            ((com.fasterxml.jackson.databind.node.ObjectNode) globalMessages.get(1)).put("content", merged);
+            // 不单独添加userMsg，不产生连续user
+        } else {
+            globalMessages.add(userMsg);
+        }
+
+        // 超限压缩
         compressContext();
 
-        // 构建请求体
-        ObjectNode body = mapper.createObjectNode();
-        body.put("model", model);
-        body.put("temperature", temperature);
-        body.put("max_tokens", maxTokens);
-        body.put("stream", false); // 强制非流式以保证上下文缓存命中
-
-        ArrayNode messages = body.putArray("messages");
-        for (JsonNode msg : globalMessages) {
-            messages.add(msg);
+        // ★ token超限保护：body过大时强制压缩再试
+        ObjectNode body = buildRequestBody(tools);
+        if (body.toString().length() > TOKEN_LIMIT_CHARS) {
+            log.warn("[LLM] ⚠️ 请求体过大({}chars), 强制压缩", body.toString().length());
+            forceCompress();
+            // 合并新消息到压缩后的摘要
+            if (globalMessages.size() > 1
+                    && "user".equals(globalMessages.get(1).path("role").asText(""))
+                    && globalMessages.get(1).path("content").asText("").startsWith("[上下文摘要]")) {
+                String merged = globalMessages.get(1).path("content").asText("")
+                        + "\n\n---\n\n【当前输入】\n" + userMessage;
+                ((com.fasterxml.jackson.databind.node.ObjectNode) globalMessages.get(1)).put("content", merged);
+            } else {
+                globalMessages.add(userMsg);
+            }
+            body = buildRequestBody(tools);
         }
 
-        if (tools != null && tools.size() > 0) {
-            body.set("tools", tools);
-            body.put("tool_choice", "auto");
-        }
-
-        // 构建前验证消息序列合法性
+        // 验证序列
         String seqError = validateMessageSequence();
         if (seqError != null) {
-            log.error("[LLM] ⚠️ 消息序列非法, 自动重置全局上下文: {}", seqError);
+            log.error("[LLM] ⚠️ 消息序列非法, 重置: {}", seqError);
             globalMessages.clear();
-            ObjectNode sysReset = mapper.createObjectNode();
-            sysReset.put("role", "system");
-            sysReset.put("content", systemPromptText);
-            globalMessages.add(sysReset);
-            globalMessages.add(userMsg);  // userMsg已在前面创建并添加过，现在重新添加
+            ObjectNode sys = mapper.createObjectNode();
+            sys.put("role", "system");
+            sys.put("content", systemPromptText);
+            globalMessages.add(sys);
+            globalMessages.add(userMsg);
+            body = buildRequestBody(tools);
         }
 
         // 计算请求体大小和消息概要
@@ -311,16 +325,12 @@ public class LLMAdapter {
     }
 
     /**
-     * 压缩全局消息列表。
-     *
-     * 超限时：前70%扔掉。后30%原样保留，但把它们压缩成一段文本，
-     * 塞进 system prompt 后面的一个 user 消息里。
-     * 后续新消息照常追加。
+     * 强制压缩（不管消息条数是否超限，token爆炸保护）。
      */
-    private void compressContext() {
-        if (globalMessages.size() <= maxMessages()) return;
+    private void forceCompress() {
+        if (globalMessages.size() <= 3) return; // system + 摘要 + user 已经压不了
 
-        // 1. 先收集已有摘要（如果索引1是摘要消息）
+        // 1. 收集已有摘要
         String oldDigest = "";
         if (globalMessages.size() > 1
                 && "user".equals(globalMessages.get(1).path("role").asText(""))
@@ -328,24 +338,82 @@ public class LLMAdapter {
             oldDigest = globalMessages.get(1).path("content").asText("");
         }
 
-        // 2. 取后30%（最近的），跳过system和已有摘要
-        int nonSystemCount = globalMessages.size() - 1 - (oldDigest.isEmpty() ? 0 : 1);
-        int keepCount = Math.max(2, (int) (nonSystemCount * keepRatio()));
+        // 2. 扫描最近N条压缩
+        int keepCount = Math.max(2, (int) ((globalMessages.size() - 1) * 0.15)); // 只保留15%
         int splitIndex = globalMessages.size() - keepCount;
 
-        // 3. 把后30%的消息压缩成一段文本
-        StringBuilder sb = new StringBuilder();
-        if (!oldDigest.isBlank()) {
-            sb.append(oldDigest).append("\n---\n");
+        // 后30%中只保留从第一个user开始的消息（跳过残余tool/assistant）
+        while (splitIndex < globalMessages.size()
+                && !"user".equals(globalMessages.get(splitIndex).path("role").asText(""))) {
+            splitIndex++;
         }
-        sb.append("[最近 ").append(keepCount).append(" 条消息的压缩]\n");
 
-        for (int i = splitIndex; i < globalMessages.size(); i++) {
+        StringBuilder sb = new StringBuilder(oldDigest);
+        if (!oldDigest.isBlank()) sb.append("\n---\n");
+        sb.append("[最近压缩]\n");
+
+        for (int i = Math.max(1, splitIndex - 20); i < splitIndex; i++) {
             JsonNode msg = globalMessages.get(i);
             String role = msg.path("role").asText("");
             String content = msg.path("content").asText("");
             if (content.isBlank()) continue;
+            String snip = content.length() > 120 ? content.substring(0, 120) + "..." : content;
+            sb.append("  [").append(role).append("] ").append(snip.replace("\n", " ")).append("\n");
+        }
 
+        String digest = sb.toString().trim();
+        if (digest.length() > digestMaxChars()) digest = digest.substring(0, digestMaxChars()) + "...[截断]";
+
+        // 保留从splitIndex开始的有效消息
+        List<JsonNode> keep = new ArrayList<>();
+        for (int i = splitIndex; i < globalMessages.size(); i++) keep.add(globalMessages.get(i));
+
+        globalMessages.clear();
+        ObjectNode sys = mapper.createObjectNode();
+        sys.put("role", "system");
+        sys.put("content", systemPromptText);
+        globalMessages.add(sys);
+        ObjectNode dm = mapper.createObjectNode();
+        dm.put("role", "user");
+        dm.put("content", "[上下文摘要] 以下是之前对话的压缩记录：\n\n" + digest);
+        globalMessages.add(dm);
+        globalMessages.addAll(keep);
+
+        log.info("[LLM] 🔄 强制压缩: →{}条 (摘要{}chars)", globalMessages.size(), digest.length());
+    }
+
+    /**
+     * 普通压缩：超限时前70%丢弃，后30%原样保留并压缩摘要。
+     */
+    private void compressContext() {
+        if (globalMessages.size() <= maxMessages()) return;
+
+        String oldDigest = "";
+        if (globalMessages.size() > 1
+                && "user".equals(globalMessages.get(1).path("role").asText(""))
+                && globalMessages.get(1).path("content").asText("").startsWith("[上下文摘要]")) {
+            oldDigest = globalMessages.get(1).path("content").asText("");
+        }
+
+        int nonSystemCount = globalMessages.size() - 1 - (oldDigest.isEmpty() ? 0 : 1);
+        int keepCount = Math.max(2, (int) (nonSystemCount * keepRatio()));
+        int splitIndex = globalMessages.size() - keepCount;
+
+        // ★ 后30%从第一个user开始（跳过残留的tool/assistant）
+        while (splitIndex < globalMessages.size()
+                && !"user".equals(globalMessages.get(splitIndex).path("role").asText(""))) {
+            splitIndex++;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        if (!oldDigest.isBlank()) sb.append(oldDigest).append("\n---\n");
+        sb.append("[最近 ").append(keepCount).append(" 条消息的压缩]\n");
+
+        for (int i = Math.max(1, splitIndex - 30); i < splitIndex; i++) {
+            JsonNode msg = globalMessages.get(i);
+            String role = msg.path("role").asText("");
+            String content = msg.path("content").asText("");
+            if (content.isBlank()) continue;
             if ("tool".equals(role)) {
                 String name = msg.path("name").asText("");
                 String snip = content.length() > 80 ? content.substring(0, 80) + "..." : content;
@@ -359,21 +427,38 @@ public class LLMAdapter {
         String digest = sb.toString().trim();
         if (digest.length() > digestMaxChars()) digest = digest.substring(0, digestMaxChars()) + "...[截断]";
 
-        // 4. 重建：system + 压缩摘要user消息。前70%直接扔掉。
-        globalMessages.clear();
+        List<JsonNode> keep = new ArrayList<>();
+        for (int i = splitIndex; i < globalMessages.size(); i++) keep.add(globalMessages.get(i));
 
+        globalMessages.clear();
         ObjectNode sys = mapper.createObjectNode();
         sys.put("role", "system");
         sys.put("content", systemPromptText);
         globalMessages.add(sys);
-
         ObjectNode dm = mapper.createObjectNode();
         dm.put("role", "user");
         dm.put("content", "[上下文摘要] 以下是之前对话的压缩记录：\n\n" + digest);
         globalMessages.add(dm);
+        globalMessages.addAll(keep);
 
-        log.info("[LLM] 🔄 上下文压缩完成: 前70%丢弃, 后30%压缩为{}chars摘要, 当前列表={}条",
-                digest.length(), globalMessages.size());
+        log.info("[LLM] 🔄 压缩: {}条→{}条 (摘要{}chars, 保留{}条)",
+                keep.size() + (splitIndex - 1) + 2, globalMessages.size(), digest.length(), keep.size());
+    }
+
+    /** 构建请求体（复用逻辑） */
+    private ObjectNode buildRequestBody(ArrayNode tools) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("model", model);
+        body.put("temperature", temperature);
+        body.put("max_tokens", maxTokens);
+        body.put("stream", false);
+        ArrayNode messages = body.putArray("messages");
+        for (JsonNode msg : globalMessages) messages.add(msg);
+        if (tools != null && tools.size() > 0) {
+            body.set("tools", tools);
+            body.put("tool_choice", "auto");
+        }
+        return body;
     }
 
     // ==========================================
