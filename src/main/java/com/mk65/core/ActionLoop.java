@@ -97,6 +97,8 @@ public class ActionLoop {
         registerTool(new com.mk65.tool.ReadFile(workspace));
         registerTool(new com.mk65.tool.WriteFile(workspace));
         registerTool(new com.mk65.tool.Recall());
+        registerTool(new com.mk65.tool.CreateTask());
+        com.mk65.tool.CreateTask.setInputBuilder(inputBuilder);
         log.info("[ActionLoop] 工具箱已就绪: {} 个工具", toolbox.size());
         toolbox.keySet().forEach(n -> log.info("[ActionLoop]   - {}", n));
     }
