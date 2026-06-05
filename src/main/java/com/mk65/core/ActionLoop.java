@@ -226,10 +226,9 @@ public class ActionLoop {
             ArrayNode toolsArray = buildToolsArray();
 
             // ── 4. 调用 LLM ──
-            log.info("[ActionLoop] 🤖 调用LLM (systemPrompt={}chars, userMessage={}chars, tools={})",
-                    systemPrompt != null ? systemPrompt.length() : 0,
-                    userMessage.length(), toolsArray.size());
-            LLMResult result = llm.chat(systemPrompt, userMessage, toolsArray);
+            log.info("[ActionLoop] 🤖 调用LLM (userMessage={}chars, tools={}, globalMessages={})",
+                    userMessage.length(), toolsArray.size(), llm.getMessageCount());
+            LLMResult result = llm.chat(userMessage, toolsArray);
 
             if (result.isError()) {
                 log.error("[ActionLoop] ❌ LLM 返回错误: {}", result.content());
@@ -256,6 +255,9 @@ public class ActionLoop {
                             long toolMs = System.currentTimeMillis() - toolStart;
 
                             toolRecords.add("[" + fnName + "]: " + execResult);
+                            // ★ 工具结果回灌到 LLM 全局上下文
+                            llm.appendToolResult(tc.id(), fnName, execResult);
+
                             log.info("[ActionLoop]   ✅ {} ({}ms): {}",
                                     fnName, toolMs,
                                     execResult.length() > 80
@@ -264,11 +266,13 @@ public class ActionLoop {
                         } catch (Exception e) {
                             String errMsg = "[" + fnName + "] 执行异常: " + e.getMessage();
                             toolRecords.add(errMsg);
+                            llm.appendToolResult(tc.id(), fnName, errMsg);
                             log.error("[ActionLoop]   ❌ {} 执行异常", fnName, e);
                         }
                     } else {
                         String errMsg = "工具 \"" + fnName + "\" 未注册";
                         toolRecords.add(errMsg);
+                        llm.appendToolResult(tc.id() != null ? tc.id() : "unknown", fnName, errMsg);
                         log.warn("[ActionLoop]   ⚠️ {}", errMsg);
                     }
                 }
@@ -322,7 +326,9 @@ public class ActionLoop {
         } catch (Exception e) {
             this.systemPrompt = buildDefaultSystemPrompt();
         }
-        log.info("[ActionLoop] 系统指令已加载 ({}chars)", systemPrompt.length());
+        // ★ 注入 LLM 全局缓存（前缀不变 → API层缓存命中）
+        llm.setSystemPrompt(systemPrompt);
+        log.info("[ActionLoop] 系统指令已加载 ({}chars) 并注入LLM全局缓存", systemPrompt.length());
     }
 
     private String buildDefaultSystemPrompt() {
