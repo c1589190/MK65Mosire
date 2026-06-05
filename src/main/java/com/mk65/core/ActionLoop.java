@@ -9,6 +9,7 @@ import com.mk65.llm.LLMAdapter;
 import com.mk65.llm.LLMAdapter.LLMResult;
 import com.mk65.llm.LLMAdapter.ToolCall;
 import com.mk65.motivation.ConflictDetector;
+import com.mk65.motivation.MemoryManager;
 import com.mk65.motivation.MotivationMatrix;
 import com.mk65.motivation.MotivationReport;
 import com.mk65.tokenizer.Tokenizer;
@@ -95,6 +96,7 @@ public class ActionLoop {
         registerTool(new com.mk65.tool.ListDir(workspace));
         registerTool(new com.mk65.tool.ReadFile(workspace));
         registerTool(new com.mk65.tool.WriteFile(workspace));
+        registerTool(new com.mk65.tool.Recall());
         log.info("[ActionLoop] 工具箱已就绪: {} 个工具", toolbox.size());
         toolbox.keySet().forEach(n -> log.info("[ActionLoop]   - {}", n));
     }
@@ -213,13 +215,17 @@ public class ActionLoop {
             Set<String> novelTokens = matrix.findNovelTokens(inputTokens);
             List<ConflictDetector.ConflictPair> conflicts = ConflictDetector.detectConflicts(dist);
 
+            // ★ 自动经验检索：Jaccard匹配最近500条经验
+            MemoryManager mem = MemoryManager.getInstance();
+            java.util.List<MemoryManager.ExpMatch> autoMemories = mem.autoRecall(inputTokens, 3);
+
             // 综合投票
             Map<String, Double> overallVotes = computeOverallVotes(dist);
 
-            boolean hasHistory = !dist.isEmpty() || !novelTokens.equals(new HashSet<>(inputTokens));
+            boolean hasHistory = !dist.isEmpty() || !autoMemories.isEmpty();
 
             MotivationReport report = new MotivationReport(
-                    overallVotes, dist, conflicts, novelTokens, hasHistory);
+                    overallVotes, dist, conflicts, novelTokens, autoMemories, hasHistory);
 
             // ── 3. 构建 prompt ──
             String userMessage = buildUserMessage(input.actionText(), report);
@@ -291,11 +297,19 @@ public class ActionLoop {
 
             // ── 6. 更新共现矩阵 ──
             if (!inputTokens.isEmpty() && !allActionTokens.isEmpty()) {
-                // 去重
                 List<String> uniqueInput = inputTokens.stream().distinct().toList();
                 List<String> uniqueAction = allActionTokens.stream().distinct().toList();
                 matrix.update(uniqueInput, uniqueAction);
             }
+
+            // ── 6.5 自动录制经验 ──
+            List<String> executedToolNames = result.hasToolCalls()
+                    ? result.toolCalls().stream().map(ToolCall::name).toList()
+                    : List.of();
+            String thoughts = result.content() != null ? result.content() : "";
+            mem.record(round, input.actionText(), input.source(),
+                    thoughts, executedToolNames, toolRecords,
+                    inputTokens, allActionTokens);
 
             // ── 7. 输出控制台反馈 ──
             if (!toolRecords.isEmpty()) {

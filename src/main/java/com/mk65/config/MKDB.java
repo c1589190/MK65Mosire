@@ -52,6 +52,26 @@ public class MKDB {
                 )
             """);
 
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS Experiences (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    round_number    INTEGER NOT NULL,
+                    action_text     TEXT NOT NULL,
+                    source          TEXT NOT NULL,
+                    thoughts        TEXT,
+                    tool_names      TEXT NOT NULL DEFAULT '[]',
+                    tool_results    TEXT NOT NULL DEFAULT '[]',
+                    input_tokens    TEXT NOT NULL DEFAULT '[]',
+                    action_tokens   TEXT NOT NULL DEFAULT '[]',
+                    helpful_count   INTEGER NOT NULL DEFAULT 0,
+                    recall_count    INTEGER NOT NULL DEFAULT 0,
+                    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """);
+
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_exp_source ON Experiences(source)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_exp_tokens ON Experiences(input_tokens)");
+
             log.info("[MKDB] SQLite 初始化完成: {}", MKConfig.DB_URL);
         } catch (SQLException e) {
             log.error("[MKDB] 数据库初始化失败", e);

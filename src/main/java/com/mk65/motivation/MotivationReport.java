@@ -21,6 +21,8 @@ public class MotivationReport {
     private final List<ConflictDetector.ConflictPair> conflicts;
     // 新异 token
     private final Set<String> novelTokens;
+    // 自动关联的历史经验（Jaccard匹配）
+    private final List<MemoryManager.ExpMatch> autoMemories;
     // 是否有任何历史数据
     private final boolean hasHistory;
 
@@ -29,11 +31,13 @@ public class MotivationReport {
             Map<String, Map<String, Double>> perTokenDistribution,
             List<ConflictDetector.ConflictPair> conflicts,
             Set<String> novelTokens,
+            List<MemoryManager.ExpMatch> autoMemories,
             boolean hasHistory) {
         this.overallVotes = overallVotes;
         this.perTokenDistribution = perTokenDistribution;
         this.conflicts = conflicts;
         this.novelTokens = novelTokens;
+        this.autoMemories = autoMemories != null ? autoMemories : List.of();
         this.hasHistory = hasHistory;
     }
 
@@ -86,7 +90,17 @@ public class MotivationReport {
             sb.append("  建议: 两个方向矛盾，可能需要先澄清或分步处理。\n\n");
         }
 
-        // 3. 新异token
+        // 3. 关联经验
+        if (!autoMemories.isEmpty()) {
+            sb.append("📖 关联历史经验（Jaccard场景匹配，最像的过往实践）:\n");
+            for (MemoryManager.ExpMatch m : autoMemories) {
+                sb.append(String.format("  相似度 %.2f ", m.jaccard()));
+                sb.append(m.toPromptLine().trim()).append("\n");
+            }
+            sb.append("\n");
+        }
+
+        // 4. 新异token
         if (!novelTokens.isEmpty()) {
             sb.append("🆕 新异token（首次出现或极罕见，可能指向新任务类型）:\n");
             sb.append("  ").append(String.join(", ", novelTokens)).append("\n");
