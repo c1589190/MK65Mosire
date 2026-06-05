@@ -91,11 +91,25 @@ public class MKDB {
 
     /** 迁移辅助：如果列不存在则添加 */
     public static void ensureColumn(String table, String column, String definition) {
+        // 先检查列是否存在
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (rs.next()) {
+                if (column.equals(rs.getString("name"))) return; // 已存在
+            }
+        } catch (SQLException e) {
+            log.warn("[MKDB] PRAGMA table_info 失败: {}", e.getMessage());
+            return;
+        }
+        // 不存在则添加（SQLite ALTER TABLE 的 DEFAULT 只能是字面量或null）
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement()) {
-            stmt.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+            String safeDef = definition.replace("NOT NULL DEFAULT '[]'", "DEFAULT '[]'");
+            stmt.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + safeDef);
+            log.info("[MKDB] 数据库迁移: {}.{} 列已添加", table, column);
         } catch (SQLException e) {
-            // 列已存在会抛异常，忽略
+            log.warn("[MKDB] ALTER TABLE 失败 {}.{}: {}", table, column, e.getMessage());
         }
     }
 
