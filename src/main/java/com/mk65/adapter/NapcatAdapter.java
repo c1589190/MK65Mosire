@@ -104,9 +104,21 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
             String postType = msg.path("post_type").asText("");
             String messageType = msg.path("message_type").asText("");
 
-            if (!"message".equals(postType)) return;
+            // 诊断: 打印非message事件
+            if (!"message".equals(postType)) {
+                log.debug("[Napcat] 非消息事件: post_type={}, keys={}",
+                        postType, msg.fieldNames());
+                return;
+            }
             String text = msg.path("raw_message").asText("");
-            if (text.isBlank()) return;
+            // raw_message 可能为空但 message 字段有内容（Napcat版本差异）
+            if (text.isBlank()) {
+                text = extractText(msg.path("message"));
+            }
+            if (text.isBlank()) {
+                log.debug("[Napcat] 消息事件但文本为空: messageType={}", messageType);
+                return;
+            }
 
             String source;
             String senderName = msg.path("sender").path("nickname").asText("");
@@ -125,6 +137,9 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
             } else {
                 return;
             }
+
+            log.info("[Napcat] 📨 收到消息 | postType={} messageType={} textLen={}",
+                    postType, messageType, text.length());
 
             // ★ 自动拉取历史记录并拼入消息
             String historyText = fetchRecentHistory(source);
