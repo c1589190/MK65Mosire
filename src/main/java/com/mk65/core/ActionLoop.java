@@ -277,6 +277,8 @@ public class ActionLoop {
 
             if (result.isError()) {
                 log.error("[ActionLoop] ❌ LLM 返回错误: {}", result.content());
+                // ★ 错误重试：把当前输入压回准备池（降权避免死循环）
+                actionPool.pushInternal("【重试】" + input.rawText(), input.priority() * 0.5);
                 return;
             }
             MK65Debug.llmResponse(System.currentTimeMillis() - llmStart,
@@ -288,6 +290,8 @@ public class ActionLoop {
             List<String> toolRecords = new ArrayList<>();
 
             if (result.hasToolCalls()) {
+                List<String> toolErrors = new ArrayList<>();
+
                 for (ToolCall tc : result.toolCalls()) {
                     String fnName = tc.name();
                     String fnArgs = tc.arguments();
@@ -313,15 +317,24 @@ public class ActionLoop {
                         } catch (Exception e) {
                             String errMsg = "[" + fnName + "] 执行异常: " + e.getMessage();
                             toolRecords.add(errMsg);
+                            toolErrors.add(fnName + " 执行异常: " + e.getMessage());
                             llm.appendToolResult(tc.id(), fnName, errMsg);
                             log.error("[ActionLoop]   ❌ {} 执行异常", fnName, e);
                         }
                     } else {
                         String errMsg = "工具 \"" + fnName + "\" 未注册";
                         toolRecords.add(errMsg);
+                        toolErrors.add("未知工具: " + fnName);
                         llm.appendToolResult(tc.id() != null ? tc.id() : "unknown", fnName, errMsg);
                         log.warn("[ActionLoop]   ⚠️ {}", errMsg);
                     }
+                }
+
+                // ★ 工具错误反哺：作为内源消息推入行动池，让LLM学习修正
+                if (!toolErrors.isEmpty()) {
+                    String errorSummary = "上一轮工具调用出现错误: " + String.join("; ", toolErrors)
+                            + "。请检查工具名和参数是否正确，如果需要改用其他工具来完成原始任务。";
+                    actionPool.pushInternal(errorSummary, 0.6);
                 }
 
                 allActionTokens.addAll(ProcessEncoder.encode(result.toolCalls()));
