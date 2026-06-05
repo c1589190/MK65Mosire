@@ -3,22 +3,22 @@ package com.mk65.tool;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.mk65.core.ActionTextBuilder;
+import com.mk65.core.PrepareActionPool;
 
 /**
  * 创建后续任务工具。
  * LLM 在当前轮无法完成所有事情时，给自己创建一个待处理任务。
+ * 任务进入 PrepareActionPool，按优先级和时间排序。
  */
 public class CreateTask implements MKTool {
 
     private static final ObjectMapper mapper = new ObjectMapper();
     private String lastRecord = null;
 
-    // 由 ActionLoop 注入
-    private static volatile ActionTextBuilder inputBuilder;
+    private static volatile PrepareActionPool actionPool;
 
-    public static void setInputBuilder(ActionTextBuilder builder) {
-        inputBuilder = builder;
+    public static void setActionPool(PrepareActionPool pool) {
+        actionPool = pool;
     }
 
     @Override
@@ -71,11 +71,11 @@ public class CreateTask implements MKTool {
 
         this.lastRecord = "create_task: [" + desc.substring(0, Math.min(60, desc.length())) + "] pri=" + pri;
 
-        if (inputBuilder != null) {
-            inputBuilder.onInternalTask(desc, pri);
+        if (actionPool != null) {
+            actionPool.pushInternal(desc, pri);
             return "SUCCESS: 任务已创建 — " + desc;
         }
-        return "ERROR: 任务队列未初始化";
+        return "ERROR: 行动池未初始化";
     }
 
     @Override

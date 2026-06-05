@@ -116,7 +116,7 @@ public class Main {
             try {
                 napcat = new NapcatAdapter();
                 napcat.setMessageCallback((source, text) ->
-                        loop.getInputBuilder().onExternalMessage(source, text));
+                        loop.getActionPool().pushExternal(source, text));
                 napcat.start();
                 SendMessage.setNapcat(napcat);
                 log.info("[Main] NapcatQQ 适配器已启动");
@@ -156,7 +156,7 @@ public class Main {
                 } else if ("/stats".equalsIgnoreCase(line.trim())) {
                     printStats(loop);
                 } else {
-                    loop.getInputBuilder().onConsoleInput(line);
+                    loop.getActionPool().pushConsole(line);
                 }
             }
         }

@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.mk65.config.MKConfig;
-import com.mk65.core.ActionTextBuilder.ActionInput;
+import com.mk65.core.PrepareActionPool.ActionInput;
 import com.mk65.llm.LLMAdapter;
 import com.mk65.llm.LLMAdapter.LLMResult;
 import com.mk65.llm.LLMAdapter.ToolCall;
@@ -37,7 +37,7 @@ public class ActionLoop {
 
     private static volatile ActionLoop INSTANCE;
 
-    private final ActionTextBuilder inputBuilder;
+    private final PrepareActionPool actionPool;
     private final Tokenizer tokenizer;
     private final MotivationMatrix matrix;
     private final LLMAdapter llm;
@@ -50,7 +50,7 @@ public class ActionLoop {
     private String systemPrompt;
 
     private ActionLoop() {
-        this.inputBuilder = new ActionTextBuilder();
+        this.actionPool = new PrepareActionPool();
         this.tokenizer = Tokenizer.getInstance();
         this.matrix = MotivationMatrix.getInstance();
         this.llm = new LLMAdapter();
@@ -98,7 +98,7 @@ public class ActionLoop {
         registerTool(new com.mk65.tool.WriteFile(workspace));
         registerTool(new com.mk65.tool.Recall());
         registerTool(new com.mk65.tool.CreateTask());
-        com.mk65.tool.CreateTask.setInputBuilder(inputBuilder);
+        com.mk65.tool.CreateTask.setActionPool(actionPool);
         log.info("[ActionLoop] 工具箱已就绪: {} 个工具", toolbox.size());
         toolbox.keySet().forEach(n -> log.info("[ActionLoop]   - {}", n));
     }
@@ -113,9 +113,9 @@ public class ActionLoop {
     // 公开方法
     // ==========================================
 
-    /** 获取输入构建器（供 NapcatAdapter / Console 推送消息） */
-    public ActionTextBuilder getInputBuilder() {
-        return inputBuilder;
+    /** 获取行动池（供 NapcatAdapter / Console 推送消息） */
+    public PrepareActionPool getActionPool() {
+        return actionPool;
     }
 
     /** 获取工具箱（供外部查询） */
@@ -168,12 +168,11 @@ public class ActionLoop {
         if (isProcessing.get()) return;
 
         try {
-            // 非阻塞轮询输入
-            ActionInput input = inputBuilder.poll(100);
+            PrepareActionPool.ActionInput input = actionPool.poll(100);
             if (input == null) return;
 
             if (isProcessing.compareAndSet(false, true)) {
-                ActionInput finalInput = input;
+                PrepareActionPool.ActionInput finalInput = input;
                 executor.submit(() -> {
                     try {
                         processRound(finalInput);
@@ -182,12 +181,8 @@ public class ActionLoop {
                     }
                 });
             } else {
-                // 重新放回队列
-                if (input.source().equals("console")) {
-                    inputBuilder.onConsoleInput(input.rawText());
-                } else if (!input.source().equals("internal")) {
-                    inputBuilder.onExternalMessage(input.source(), input.rawText());
-                }
+                // 重新入池
+                actionPool.push(input);
             }
         } catch (Exception e) {
             log.error("[ActionLoop] 心跳异常", e);
