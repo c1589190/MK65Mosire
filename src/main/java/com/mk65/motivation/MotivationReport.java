@@ -1,11 +1,14 @@
 package com.mk65.motivation;
 
 import com.mk65.core.PrepareActionPool;
+import lombok.extern.slf4j.Slf4j;
+
 import java.util.*;
 
 /**
  * 动机报告 — 每轮注入 LLM prompt 的注意力引导数据。
  */
+@Slf4j
 public class MotivationReport {
 
     private final Map<String, Double> overallVotes;
@@ -103,6 +106,52 @@ public class MotivationReport {
         }
 
         return sb.toString();
+    }
+
+    /** 诊断：打印报告各组件的字符数，方便定位膨胀源 */
+    public void logComponentSizes() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("倾向: ");
+        overallVotes.entrySet().stream()
+                .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                .limit(3)
+                .forEach(e -> sb.append(e.getKey()).append("(").append(String.format("%.0f", e.getValue())).append(") "));
+        int votesSize = sb.length();
+
+        int conflictsSize = 0;
+        int resolutionChars = 0;
+        if (!conflicts.isEmpty()) {
+            StringBuilder cs = new StringBuilder();
+            for (ConflictDetector.ConflictPair c : conflicts) {
+                cs.append(String.format("[%s]vs[%s]:%.2f ", c.tokenA(), c.tokenB(), c.conflictScore()));
+                String pairKey = c.tokenA() + "|" + c.tokenB();
+                List<MemoryManager.ExpMatch> resolutions = conflictResolutions.getOrDefault(pairKey, List.of());
+                cs.append(String.format("(方案%d条) ", resolutions.size()));
+                for (MemoryManager.ExpMatch r : resolutions) {
+                    resolutionChars += r.actionText().length();
+                }
+            }
+            conflictsSize = cs.length();
+        }
+
+        int expSize = 0;
+        if (!autoMemories.isEmpty()) {
+            for (MemoryManager.ExpMatch m : autoMemories) {
+                expSize += m.actionText().length();
+                if (!m.toolNames().isEmpty()) expSize += String.join(",", m.toolNames()).length();
+            }
+        }
+
+        int poolSize = actionPoolList.size();
+
+        int distTokens = perTokenDistribution.size();
+        int eqSize = equivalentTokens.size();
+        int novelSize = novelTokens.size();
+
+        log.info("[Report] 📏 组件尺寸: votes={}chars, conflicts={}chars(方案内容{}chars), exps={}chars(total{}条), pool={}条 | "
+                + "仅计算未注入: distTokens={}, equivs={}, novels={}",
+                votesSize, conflictsSize, resolutionChars, expSize, autoMemories.size(), poolSize,
+                distTokens, eqSize, novelSize);
     }
 
     // getters

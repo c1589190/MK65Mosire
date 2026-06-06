@@ -268,6 +268,10 @@ public class ActionLoop {
 
             // ── 3. 构建 prompt ──
             String userMessage = buildUserMessage(input.actionText(), report);
+            log.info("[ActionLoop] 📏 Prompt: actionText={}chars, report={}chars, total={}chars | conflicts={}, exps={}, pool={}",
+                    input.actionText().length(), userMessage.length() - input.actionText().length() - 20,
+                    userMessage.length(), conflicts.size(), autoMemories.size(), actionList.size());
+            report.logComponentSizes();
             ArrayNode toolsArray = buildToolsArray();
 
             // ── 4. 调用 LLM ──
