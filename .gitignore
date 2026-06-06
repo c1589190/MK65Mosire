@@ -3,7 +3,7 @@
 *.db-wal
 target/
 logs/
-workspace/
+/workspace/
 .idea/
 *.iml
 application.properties
