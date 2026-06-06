@@ -41,7 +41,6 @@ public class MotivationReport {
 
     public String toPromptBlock() {
         int maxExps = com.mk65.config.MKConfig.MOTIVATION_REPORT_MAX_EXPERIENCES;
-        int expMaxChars = com.mk65.config.MKConfig.MOTIVATION_REPORT_EXP_MAX_CHARS;
         StringBuilder sb = new StringBuilder();
         sb.append("【动机报告】\n");
 
@@ -50,7 +49,7 @@ public class MotivationReport {
             return sb.toString();
         }
 
-        // 1. 行动方向 — 仅 top 3
+        // 1. 行动倾向 — top 3
         if (!overallVotes.isEmpty()) {
             sb.append("倾向: ");
             overallVotes.entrySet().stream()
@@ -60,16 +59,32 @@ public class MotivationReport {
             sb.append("\n");
         }
 
-        // 2. 关联历史经验 — top N, 每条限制字符数
+        // 2. 行动冲突 — LLM 要处理的核心矛盾（不截断）
+        if (!conflicts.isEmpty()) {
+            sb.append("⚠️ 行动冲突:\n");
+            for (ConflictDetector.ConflictPair c : conflicts) {
+                sb.append(String.format("  [%s] vs [%s] — 冲突度: %.2f\n", c.tokenA(), c.tokenB(), c.conflictScore()));
+                String pairKey = c.tokenA() + "|" + c.tokenB();
+                List<MemoryManager.ExpMatch> resolutions = conflictResolutions.getOrDefault(pairKey, List.of());
+                if (!resolutions.isEmpty()) {
+                    sb.append(String.format("    历史方案 (%d条):\n", resolutions.size()));
+                    for (MemoryManager.ExpMatch r : resolutions) {
+                        sb.append(String.format("      Exp#%d R%d: %s → %s\n", r.id(), r.roundNumber(),
+                                r.actionText(), r.toolNames().isEmpty() ? "(纯文本)" : String.join(",", r.toolNames())));
+                    }
+                }
+            }
+            sb.append("\n");
+        }
+
+        // 3. 关联历史经验 — top N, 完整文本
         if (!autoMemories.isEmpty()) {
             sb.append("经验:\n");
             int count = 0;
             for (MemoryManager.ExpMatch m : autoMemories) {
                 if (count >= maxExps) break;
-                String text = m.actionText();
-                if (text.length() > expMaxChars) text = text.substring(0, expMaxChars) + "...";
                 String tag = m.jaccard() > 0.3 ? "🟢" : (m.jaccard() > 0.1 ? "🟡" : "⚪");
-                sb.append(String.format("  %s [Exp#%d] sim=%.2f: %s\n", tag, m.id(), m.jaccard(), text));
+                sb.append(String.format("  %s [Exp#%d] sim=%.2f: %s\n", tag, m.id(), m.jaccard(), m.actionText()));
                 if (!m.toolNames().isEmpty())
                     sb.append("    → ").append(String.join(", ", m.toolNames())).append("\n");
                 count++;
@@ -77,7 +92,7 @@ public class MotivationReport {
             sb.append("\n");
         }
 
-        // 3. 行动池 — 每单元一行
+        // 4. 行动池 — 每单元一行
         if (!actionPoolList.isEmpty()) {
             sb.append("行动池:\n");
             for (PrepareActionPool.ActionSummary a : actionPoolList) {
