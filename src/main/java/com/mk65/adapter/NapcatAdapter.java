@@ -141,7 +141,7 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
             // ── 提取发送者信息（纯计算，无I/O，立即完成）──
             JsonNode senderNode = msg.path("sender");
             long senderId = senderNode.path("user_id").asLong();
-            boolean isSelf = !selfId.isBlank() && String.valueOf(senderId).equals(selfId);
+            boolean isSelf = isSelfId(senderId);
 
             String nickname = senderNode.path("nickname").asText("");
             String card = senderNode.path("card").asText("");
@@ -154,20 +154,22 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
 
             String atInfo = extractAtInfo(msg.path("message"));
 
+            String role = isSelf ? "self" : ("qqid:" + senderId);
+
             String source;
             if ("group".equals(messageType)) {
                 long groupId = msg.path("group_id").asLong();
                 source = "qq_group:" + groupId;
-                text = String.format("[source:%s] [role:qqid:%d] %s%s",
-                        source, senderId,
+                text = String.format("[source:%s] [role:%s] %s%s",
+                        source, role,
                         atInfo.isEmpty() ? "" : atInfo, text);
                 log.info("[Napcat] 📨 群聊消息 | 群:{} | 发送者:{}({}) | {}chars | {}张图",
                         groupId, senderName, senderId, text.length(), imageUrls.size());
             } else if ("private".equals(messageType)) {
                 long userId = msg.path("user_id").asLong();
                 source = "qq_private:" + userId;
-                text = String.format("[source:%s] [role:qqid:%d] %s%s",
-                        source, senderId,
+                text = String.format("[source:%s] [role:%s] %s%s",
+                        source, role,
                         atInfo.isEmpty() ? "" : atInfo, text);
                 log.info("[Napcat] 📨 私聊消息 | 发送者:{}({}) | {}chars | {}张图",
                         senderName, userId, text.length(), imageUrls.size());
@@ -295,6 +297,10 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
 
     public String getSelfId() { return selfId; }
 
+    private boolean isSelfId(long id) {
+        return !selfId.isBlank() && String.valueOf(id).equals(selfId);
+    }
+
     // ═══════════════════════════════════════════
     // 历史记录
     // ═══════════════════════════════════════════
@@ -339,7 +345,8 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
                         if (name.isBlank()) name = m.path("sender").path("nickname").asText("");
                         if (name.isBlank()) name = String.valueOf(m.path("user_id").asLong());
                         String text = extractText(m.path("message"));
-                        if (!text.isBlank()) list.add("[source:qq_group:" + groupId + "] [role:qqid:" + m.path("user_id").asLong() + "] " + name + ": " + text);
+                        String roleSelf = isSelfId(m.path("user_id").asLong()) ? "self" : ("qqid:" + m.path("user_id").asLong());
+                        if (!text.isBlank()) list.add("[source:qq_group:" + groupId + "] [role:" + roleSelf + "] " + name + ": " + text);
                     }
                 }
             }
@@ -364,7 +371,8 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
                         String name = m.path("sender").path("nickname").asText("");
                         if (name.isBlank()) name = String.valueOf(m.path("user_id").asLong());
                         String text = extractText(m.path("message"));
-                        if (!text.isBlank()) list.add("[source:qq_private:" + userId + "] [role:qqid:" + m.path("user_id").asLong() + "] " + name + ": " + text);
+                        String roleSelf = isSelfId(m.path("user_id").asLong()) ? "self" : ("qqid:" + m.path("user_id").asLong());
+                        if (!text.isBlank()) list.add("[source:qq_private:" + userId + "] [role:" + roleSelf + "] " + name + ": " + text);
                     }
                 }
             }
@@ -426,7 +434,7 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
         for (JsonNode seg : messageNode) {
             if ("at".equals(seg.path("type").asText(""))) {
                 String qq = seg.path("data").path("qq").asText("");
-                if (!qq.isBlank()) atTargets.add(qq.equals(selfId) ? "自己" : qq);
+                if (!qq.isBlank()) atTargets.add(qq.equals(selfId) ? "self" : qq);
             }
         }
         if (atTargets.isEmpty()) return "";
