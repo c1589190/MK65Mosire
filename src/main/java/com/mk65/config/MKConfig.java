@@ -38,6 +38,10 @@ public class MKConfig {
     public static int MOTIVATION_NOVELTY_MIN_COUNT = 3;
     public static double MOTIVATION_DECAY_HALF_LIFE = 500.0;
     public static int MOTIVATION_VACUUM_THRESHOLD = 1;
+    /** 动机报告中最多展示多少条关联历史经验 */
+    public static int MOTIVATION_REPORT_MAX_EXPERIENCES = 5;
+    /** 动机报告中每条经验文本的最大字符数 */
+    public static int MOTIVATION_REPORT_EXP_MAX_CHARS = 120;
 
     // ========== 认知循环 ==========
     public static long CORE_TICK_MS = 2000;
@@ -133,6 +137,8 @@ public class MKConfig {
         MOTIVATION_NOVELTY_MIN_COUNT = getInt(props, "motivation.noveltyMinCount", MOTIVATION_NOVELTY_MIN_COUNT);
         MOTIVATION_DECAY_HALF_LIFE = getDouble(props, "motivation.decayHalfLife", MOTIVATION_DECAY_HALF_LIFE);
         MOTIVATION_VACUUM_THRESHOLD = getInt(props, "motivation.vacuumThreshold", MOTIVATION_VACUUM_THRESHOLD);
+        MOTIVATION_REPORT_MAX_EXPERIENCES = getInt(props, "motivation.report.maxExperiences", MOTIVATION_REPORT_MAX_EXPERIENCES);
+        MOTIVATION_REPORT_EXP_MAX_CHARS = getInt(props, "motivation.report.expMaxChars", MOTIVATION_REPORT_EXP_MAX_CHARS);
 
         CORE_TICK_MS = getLong(props, "core.tickMs", CORE_TICK_MS);
         CORE_ROUND_TIMEOUT_SEC = getInt(props, "core.roundTimeoutSec", CORE_ROUND_TIMEOUT_SEC);
