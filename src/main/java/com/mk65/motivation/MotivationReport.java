@@ -62,18 +62,37 @@ public class MotivationReport {
             sb.append("\n");
         }
 
-        // 2. 行动冲突 — LLM 要处理的核心矛盾（不截断）
+        // 2. 行动冲突 — LLM 要处理的核心矛盾（方案文本有总长度上限）
         if (!conflicts.isEmpty()) {
+            int maxResolutionChars = com.mk65.config.MKConfig.MOTIVATION_CONFLICT_MAX_RESOLUTION_CHARS;
+            int resolutionCharsUsed = 0;
             sb.append("⚠️ 行动冲突:\n");
             for (ConflictDetector.ConflictPair c : conflicts) {
                 sb.append(String.format("  [%s] vs [%s] — 冲突度: %.2f\n", c.tokenA(), c.tokenB(), c.conflictScore()));
                 String pairKey = c.tokenA() + "|" + c.tokenB();
                 List<MemoryManager.ExpMatch> resolutions = conflictResolutions.getOrDefault(pairKey, List.of());
                 if (!resolutions.isEmpty()) {
+                    // 方案文本总长限幅：超过上限后只显示"还有N条略"
+                    if (resolutionCharsUsed >= maxResolutionChars) {
+                        sb.append(String.format("    (方案文本已达上限, 剩余%d条略)\n", resolutions.size()));
+                        continue;
+                    }
                     sb.append(String.format("    历史方案 (%d条):\n", resolutions.size()));
+                    int shown = 0;
                     for (MemoryManager.ExpMatch r : resolutions) {
+                        int wouldUse = resolutionCharsUsed + r.actionText().length();
+                        if (wouldUse > maxResolutionChars && shown > 0) {
+                            int remaining = resolutions.size() - shown;
+                            if (remaining > 0) {
+                                sb.append(String.format("      (方案文本截断, 剩余%d条略)\n", remaining));
+                            }
+                            resolutionCharsUsed = maxResolutionChars; // 标记已达上限
+                            break;
+                        }
                         sb.append(String.format("      Exp#%d R%d: %s → %s\n", r.id(), r.roundNumber(),
                                 r.actionText(), r.toolNames().isEmpty() ? "(纯文本)" : String.join(",", r.toolNames())));
+                        resolutionCharsUsed = wouldUse;
+                        shown++;
                     }
                 }
             }

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mk65.config.MKConfig;
+import com.mk65.vision.VisionService;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 import org.java_websocket.client.WebSocketClient;
@@ -12,8 +13,12 @@ import org.java_websocket.handshake.ServerHandshake;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
@@ -32,6 +37,13 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
     private BiConsumer<String, String> messageCallback;
     private volatile boolean connected = false;
     private String selfId = "";
+
+    /** 图片消息异步处理器：单线程保证消息顺序，不阻塞 WebSocket */
+    private final ExecutorService imageProcessor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "napcat-image");
+        t.setDaemon(true);
+        return t;
+    });
 
     public NapcatAdapter() throws URISyntaxException {
         super(buildWsUri(), buildHeaders(MKConfig.NAPCAT_TOKEN));
@@ -111,16 +123,22 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
                 return;
             }
             String text = msg.path("raw_message").asText("");
+            List<String> imageUrls = new ArrayList<>();
             // raw_message 可能为空但 message 字段有内容（Napcat版本差异）
             if (text.isBlank()) {
-                text = extractText(msg.path("message"));
+                MessageParts parts = extractMessage(msg.path("message"));
+                text = parts.text;
+                imageUrls = parts.imageUrls;
+            } else {
+                // raw_message 有值时也提取图片 URL
+                imageUrls = extractImageUrls(msg.path("message"));
             }
-            if (text.isBlank()) {
+            if (text.isBlank() && imageUrls.isEmpty()) {
                 log.debug("[Napcat] 消息事件但文本为空: messageType={}", messageType);
                 return;
             }
 
-            // 提取发送者信息
+            // ── 提取发送者信息（纯计算，无I/O，立即完成）──
             JsonNode senderNode = msg.path("sender");
             long senderId = senderNode.path("user_id").asLong();
             boolean isSelf = !selfId.isBlank() && String.valueOf(senderId).equals(selfId);
@@ -134,31 +152,68 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
                 senderName = !card.isBlank() ? card : (!nickname.isBlank() ? nickname : String.valueOf(senderId));
             }
 
-            // 提取 @提及 信息
             String atInfo = extractAtInfo(msg.path("message"));
 
             String source;
             if ("group".equals(messageType)) {
                 long groupId = msg.path("group_id").asLong();
                 source = "qq_group:" + groupId;
-                // ★ 构造带来源标识的完整文本
-                text = String.format("[%s(%d) 在群聊(%d)中说]: %s%s",
-                        senderName, senderId, groupId,
-                        atInfo.isEmpty() ? "" : "(" + atInfo + ") ", text);
-                log.info("[Napcat] 📨 群聊消息 | 群:{} | 发送者:{}({}) | {}chars",
-                        groupId, senderName, senderId, text.length());
+                text = String.format("[source:%s] [role:qqid:%d] %s%s",
+                        source, senderId,
+                        atInfo.isEmpty() ? "" : atInfo, text);
+                log.info("[Napcat] 📨 群聊消息 | 群:{} | 发送者:{}({}) | {}chars | {}张图",
+                        groupId, senderName, senderId, text.length(), imageUrls.size());
             } else if ("private".equals(messageType)) {
                 long userId = msg.path("user_id").asLong();
-                source = "qqid:" + userId;
-                text = String.format("[%s(%d) 在私聊中说]: %s",
-                        senderName, senderId, text);
-                log.info("[Napcat] 📨 私聊消息 | 发送者:{}({}) | {}chars",
-                        senderName, userId, text.length());
+                source = "qq_private:" + userId;
+                text = String.format("[source:%s] [role:qqid:%d] %s%s",
+                        source, senderId,
+                        atInfo.isEmpty() ? "" : atInfo, text);
+                log.info("[Napcat] 📨 私聊消息 | 发送者:{}({}) | {}chars | {}张图",
+                        senderName, userId, text.length(), imageUrls.size());
             } else {
                 return;
             }
 
-            // ★ 自动拉取历史记录并拼入消息
+            // ── 分流：有图片走异步，无图片走同步快速通道 ──
+            if (!imageUrls.isEmpty()) {
+                final String finalText = text;
+                final String finalSource = source;
+                final List<String> finalImageUrls = imageUrls;
+                imageProcessor.execute(() -> {
+                    try {
+                        // 1. 视觉识别（异步等待）
+                        VisionService vision = VisionService.getInstance();
+                        List<String> descriptions = vision.describeImages(finalImageUrls);
+                        String mergedText = mergeDescriptions(finalText, descriptions);
+
+                        // 2. 拉取历史记录
+                        String historyText = fetchRecentHistory(finalSource);
+                        String textWithHistory = historyText.isEmpty()
+                                ? mergedText
+                                : mergedText + "\n\n【最近聊天记录】\n" + historyText;
+
+                        // 3. 压入 ActionPool
+                        if (messageCallback != null) {
+                            messageCallback.accept(finalSource, textWithHistory);
+                        }
+                        log.debug("[Napcat] 📷 图片消息异步处理完成: source={}", finalSource);
+                    } catch (Exception e) {
+                        log.warn("[Napcat] 图片消息异步处理异常: {}", e.getMessage());
+                        // 降级：不带图片描述直接推送
+                        String historyText = fetchRecentHistory(finalSource);
+                        String textWithHistory = historyText.isEmpty()
+                                ? finalText
+                                : finalText + "\n\n【最近聊天记录】\n" + historyText;
+                        if (messageCallback != null) {
+                            messageCallback.accept(finalSource, textWithHistory);
+                        }
+                    }
+                });
+                return; // ★ WebSocket 线程立即释放
+            }
+
+            // ★ 快速通道：无图片，同步处理
             String historyText = fetchRecentHistory(source);
             String textWithHistory = historyText.isEmpty() ? text : text + "\n\n【最近聊天记录】\n" + historyText;
 
@@ -284,7 +339,7 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
                         if (name.isBlank()) name = m.path("sender").path("nickname").asText("");
                         if (name.isBlank()) name = String.valueOf(m.path("user_id").asLong());
                         String text = extractText(m.path("message"));
-                        if (!text.isBlank()) list.add(name + ": " + text);
+                        if (!text.isBlank()) list.add("[source:qq_group:" + groupId + "] [role:qqid:" + m.path("user_id").asLong() + "] " + name + ": " + text);
                     }
                 }
             }
@@ -309,7 +364,7 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
                         String name = m.path("sender").path("nickname").asText("");
                         if (name.isBlank()) name = String.valueOf(m.path("user_id").asLong());
                         String text = extractText(m.path("message"));
-                        if (!text.isBlank()) list.add(name + ": " + text);
+                        if (!text.isBlank()) list.add("[source:qq_private:" + userId + "] [role:qqid:" + m.path("user_id").asLong() + "] " + name + ": " + text);
                     }
                 }
             }
@@ -332,7 +387,38 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
         return null;
     }
 
-    /** 从Napcat消息JSON中提取纯文本 */
+    /** 从Napcat消息JSON中提取纯文本和图片URL */
+    private record MessageParts(String text, List<String> imageUrls) {}
+
+    private static MessageParts extractMessage(JsonNode messageNode) {
+        if (messageNode.isTextual()) {
+            return new MessageParts(messageNode.asText(), List.of());
+        }
+        if (messageNode.isArray()) {
+            StringBuilder sb = new StringBuilder();
+            List<String> imageUrls = new ArrayList<>();
+            for (JsonNode seg : messageNode) {
+                String type = seg.path("type").asText("");
+                if ("text".equals(type)) {
+                    sb.append(seg.path("data").path("text").asText(""));
+                } else if ("image".equals(type)) {
+                    String url = seg.path("data").path("url").asText("");
+                    if (url.isBlank()) url = seg.path("data").path("file").asText("");
+                    if (!url.isBlank()) {
+                        imageUrls.add(url);
+                        sb.append("[图片]");
+                    } else {
+                        sb.append("[图片]");
+                    }
+                } else if ("at".equals(type)) {
+                    sb.append("@").append(seg.path("data").path("qq").asText(""));
+                }
+            }
+            return new MessageParts(sb.toString(), imageUrls);
+        }
+        return new MessageParts(messageNode.asText(""), List.of());
+    }
+
     /** 从消息JSON中提取@提及信息 */
     private String extractAtInfo(JsonNode messageNode) {
         if (!messageNode.isArray()) return "";
@@ -344,9 +430,43 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
             }
         }
         if (atTargets.isEmpty()) return "";
-        return "@" + String.join(", @", atTargets);
+        StringBuilder sb = new StringBuilder();
+        for (String qq : atTargets) {
+            sb.append("[@role:qqid:").append(qq).append("] ");
+        }
+        return sb.toString().trim();
     }
 
+    /** 将视觉识别描述合并到消息文本中 */
+    private static String mergeDescriptions(String text, List<String> descriptions) {
+        if (descriptions.isEmpty()) return text;
+        StringBuilder imgDesc = new StringBuilder();
+        for (String desc : descriptions) {
+            if (!"[图片]".equals(desc)) {
+                imgDesc.append(desc);
+            }
+        }
+        if (imgDesc.length() == 0) return text;
+        return text.isBlank() ? imgDesc.toString()
+                : text + " " + imgDesc.toString();
+    }
+
+    /** 从消息JSON中只提取图片URL列表（用于 raw_message 非空但含图的场景） */
+    private static List<String> extractImageUrls(JsonNode messageNode) {
+        List<String> urls = new ArrayList<>();
+        if (!messageNode.isArray()) return urls;
+        for (JsonNode seg : messageNode) {
+            if ("image".equals(seg.path("type").asText(""))) {
+                String url = seg.path("data").path("url").asText("");
+                if (url.isBlank()) url = seg.path("data").path("file").asText("");
+                if (!url.isBlank()) urls.add(url);
+            }
+        }
+        return urls;
+    }
+
+    /** @deprecated 用 extractMessage() 代替，保留兼容 */
+    @Deprecated
     private static String extractText(JsonNode messageNode) {
         if (messageNode.isTextual()) return messageNode.asText();
         if (messageNode.isArray()) {

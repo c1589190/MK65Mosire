@@ -25,7 +25,8 @@ public interface Adapter {
      * 注册消息回调。
      * 当适配器收到新消息时，通过此回调通知核心循环。
      * 回调参数: (sourceIdentifier, messageText)
-     *   sourceIdentifier 格式: "qq_group:群号" 或 "qqid:用户QQ号"
+     *   sourceIdentifier 格式: "qq_group:群号" 或 "qq_private:用户QQ号" 或 "console" 或 "internal"
+     *   消息文本中以 [source:...] [role:...] 硬编码字段标注来源和角色
      */
     void setMessageCallback(java.util.function.BiConsumer<String, String> callback);
 }

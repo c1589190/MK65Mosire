@@ -283,6 +283,58 @@ public class MemoryManager {
         return results;
     }
 
+    /**
+     * 扫描最近 N 条经验，统计每个 token 的出现轮次数和 token 对共现轮次数。
+     * 用于 ConflictDetector 的共现系数计算。
+     *
+     * @return {occurrences, coOccurrences} — occurrences: token→出现轮次数, coOccurrences: "A|B"→共现轮次数
+     */
+    public TokenOccurrenceStats getTokenOccurrenceStats(int scanLimit) {
+        Map<String, Integer> occurrences = new HashMap<>();
+        Map<String, Integer> coOccurrences = new HashMap<>();
+
+        String sql = "SELECT input_tokens FROM Experiences ORDER BY id DESC LIMIT " + scanLimit;
+
+        try (Connection conn = MKDB.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                List<String> tokens = fromJsonArray(rs.getString("input_tokens"));
+                if (tokens.isEmpty()) continue;
+
+                // 去重：同一个 token 在同一轮只计一次
+                Set<String> uniqueTokens = new HashSet<>(tokens);
+                List<String> uniqueList = new ArrayList<>(uniqueTokens);
+
+                // 单token出现次数
+                for (String t : uniqueList) {
+                    occurrences.merge(t, 1, Integer::sum);
+                }
+
+                // token对共现次数
+                for (int i = 0; i < uniqueList.size(); i++) {
+                    for (int j = i + 1; j < uniqueList.size(); j++) {
+                        String a = uniqueList.get(i);
+                        String b = uniqueList.get(j);
+                        // 按字典序排序，保证 key 一致
+                        String key = a.compareTo(b) <= 0 ? a + "|" + b : b + "|" + a;
+                        coOccurrences.merge(key, 1, Integer::sum);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            log.error("[MemoryManager] 共现统计失败", e);
+        }
+
+        return new TokenOccurrenceStats(occurrences, coOccurrences);
+    }
+
+    /** 共现统计数据类 */
+    public record TokenOccurrenceStats(
+            Map<String, Integer> occurrences,    // token → 出现轮次数
+            Map<String, Integer> coOccurrences   // "A|B" → 共现轮次数
+    ) {}
+
     private void incrementRecallCount(int expId) {
         String sql = "UPDATE Experiences SET recall_count = recall_count + 1 WHERE id = ?";
         try (Connection conn = MKDB.getConnection();

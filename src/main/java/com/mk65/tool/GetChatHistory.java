@@ -32,7 +32,7 @@ public class GetChatHistory implements MKTool {
 
         ObjectNode fn = tool.putObject("function");
         fn.put("name", getName());
-        fn.put("description", "拉取聊天历史记录。当你需要了解之前的对话上下文时使用。");
+        fn.put("description", "拉取聊天历史记录。当你需要了解之前的对话上下文时使用。target直接复制消息中的[source:...]字段值：qq_group:群号 / qq_private:QQ号。拉取后应分析历史内容并决定是否需要回复或创建后续任务。");
 
         ObjectNode params = fn.putObject("parameters");
         params.put("type", "object");
@@ -41,7 +41,7 @@ public class GetChatHistory implements MKTool {
 
         ObjectNode target = props.putObject("target");
         target.put("type", "string");
-        target.put("description", "目标标识。qq_group:群号 或 qqid:QQ号。");
+        target.put("description", "直接复制消息中的[source:...]字段值。群聊:qq_group:群号, 私聊:qq_private:QQ号。");
 
         ObjectNode count = props.putObject("count");
         count.put("type", "integer");
@@ -72,7 +72,7 @@ public class GetChatHistory implements MKTool {
                 long userId = Long.parseLong(target.substring(prefix));
                 history = napcat.getFriendHistorySync(userId, count);
             } else {
-                return "ERROR: target格式错误。支持 qq_group:群号 或 qqid:QQ号。";
+                return "ERROR: target格式错误。支持 qq_group:群号 或 qq_private:QQ号。";
             }
 
             if (history == null || history.isEmpty()) {

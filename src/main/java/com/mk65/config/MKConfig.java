@@ -20,6 +20,15 @@ public class MKConfig {
     public static int BRAIN_MAX_TOKENS = 65535;
     public static boolean BRAIN_STREAM = true;
 
+    // ========== 视觉识别 ==========
+    public static boolean VISION_ENABLED = true;
+    public static String VISION_API_BASE = "";
+    public static String VISION_API_KEY = "";
+    public static String VISION_MODEL = "";
+    public static int VISION_MAX_TOKENS = 200;
+    public static int VISION_TIMEOUT_SEC = 15;
+    public static int VISION_MAX_IMAGES = 6;
+
     // ========== NapcatQQ ==========
     public static String NAPCAT_WS_URL = "127.0.0.1";
     public static int NAPCAT_WS_PORT = 3001;
@@ -40,6 +49,14 @@ public class MKConfig {
     public static int MOTIVATION_VACUUM_THRESHOLD = 1;
     /** 动机报告中最多展示多少条关联历史经验 */
     public static int MOTIVATION_REPORT_MAX_EXPERIENCES = 5;
+    /** 冲突对最多保留/注入多少个，超出部分自然消解 */
+    public static int MOTIVATION_CONFLICT_MAX_PAIRS = 50;
+    /** 冲突token在CoMatrix中最少总出现次数，低于此值的碎片token不参与冲突检测 */
+    public static int MOTIVATION_CONFLICT_MIN_TOKEN_COUNT = 5;
+    /** 共现扫描最近多少条经验 */
+    public static int MOTIVATION_CONFLICT_COOCCUR_SCAN_LIMIT = 300;
+    /** 冲突方案文本在prompt中的最大总字符数 */
+    public static int MOTIVATION_CONFLICT_MAX_RESOLUTION_CHARS = 8000;
 
     // ========== 认知循环 ==========
     public static long CORE_TICK_MS = 2000;
@@ -121,6 +138,17 @@ public class MKConfig {
         BRAIN_MAX_TOKENS = getInt(props, "llm.brain.maxTokens", BRAIN_MAX_TOKENS);
         BRAIN_STREAM = getBool(props, "llm.brain.stream", BRAIN_STREAM);
 
+        VISION_ENABLED = getBool(props, "vision.enabled", VISION_ENABLED);
+        VISION_API_BASE = get(props, "vision.apiBase", "");
+        if (VISION_API_BASE.isBlank()) VISION_API_BASE = BRAIN_API_BASE;
+        VISION_API_KEY = get(props, "vision.apiKey", "");
+        if (VISION_API_KEY.isBlank()) VISION_API_KEY = BRAIN_API_KEY;
+        VISION_MODEL = get(props, "vision.model", "");
+        if (VISION_MODEL.isBlank()) VISION_MODEL = BRAIN_CHAT_MODEL;
+        VISION_MAX_TOKENS = getInt(props, "vision.maxTokens", VISION_MAX_TOKENS);
+        VISION_TIMEOUT_SEC = getInt(props, "vision.timeoutSec", VISION_TIMEOUT_SEC);
+        VISION_MAX_IMAGES = getInt(props, "vision.maxImages", VISION_MAX_IMAGES);
+
         NAPCAT_WS_URL = get(props, "napcat.wsUrl", NAPCAT_WS_URL);
         NAPCAT_WS_PORT = getInt(props, "napcat.wsPort", NAPCAT_WS_PORT);
         NAPCAT_HTTP_URL = get(props, "napcat.httpUrl", NAPCAT_HTTP_URL);
@@ -136,6 +164,10 @@ public class MKConfig {
         MOTIVATION_DECAY_HALF_LIFE = getDouble(props, "motivation.decayHalfLife", MOTIVATION_DECAY_HALF_LIFE);
         MOTIVATION_VACUUM_THRESHOLD = getInt(props, "motivation.vacuumThreshold", MOTIVATION_VACUUM_THRESHOLD);
         MOTIVATION_REPORT_MAX_EXPERIENCES = getInt(props, "motivation.report.maxExperiences", MOTIVATION_REPORT_MAX_EXPERIENCES);
+        MOTIVATION_CONFLICT_MAX_PAIRS = getInt(props, "motivation.conflict.maxPairs", MOTIVATION_CONFLICT_MAX_PAIRS);
+        MOTIVATION_CONFLICT_MIN_TOKEN_COUNT = getInt(props, "motivation.conflict.minTokenCount", MOTIVATION_CONFLICT_MIN_TOKEN_COUNT);
+        MOTIVATION_CONFLICT_COOCCUR_SCAN_LIMIT = getInt(props, "motivation.conflict.cooccurScanLimit", MOTIVATION_CONFLICT_COOCCUR_SCAN_LIMIT);
+        MOTIVATION_CONFLICT_MAX_RESOLUTION_CHARS = getInt(props, "motivation.conflict.maxResolutionChars", MOTIVATION_CONFLICT_MAX_RESOLUTION_CHARS);
 
         CORE_TICK_MS = getLong(props, "core.tickMs", CORE_TICK_MS);
         CORE_ROUND_TIMEOUT_SEC = getInt(props, "core.roundTimeoutSec", CORE_ROUND_TIMEOUT_SEC);

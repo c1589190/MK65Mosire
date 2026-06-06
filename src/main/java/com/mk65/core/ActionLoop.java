@@ -114,6 +114,7 @@ public class ActionLoop {
         registerTool(new com.mk65.tool.Recall());
         registerTool(new com.mk65.tool.GetChatHistory());
         registerTool(new com.mk65.tool.CreateTask());
+        registerTool(new com.mk65.tool.GetSystemLog());
         registerTool(new com.mk65.tool.FinishAction());
         com.mk65.tool.CreateTask.setActionPool(actionPool);
         com.mk65.tool.FinishAction.setActionPool(actionPool);
@@ -229,8 +230,27 @@ public class ActionLoop {
             // ── 2. 动机查询 ──
             Map<String, Map<String, Double>> dist = matrix.queryActionDistribution(inputTokens);
             Set<String> novelTokens = matrix.findNovelTokens(inputTokens);
-            List<ConflictDetector.ConflictPair> conflicts = ConflictDetector.detectConflicts(dist);
+            List<ConflictDetector.ConflictPair> rawConflicts = ConflictDetector.detectConflicts(dist);
             Map<String, Double> overallVotes = computeOverallVotes(dist);
+
+            // ★ 共现过滤：只保留最有意义的冲突对（碎片token和从不共现的token对自然消解）
+            MemoryManager mem = MemoryManager.getInstance();
+            List<ConflictDetector.ConflictPair> conflicts;
+            if (rawConflicts.size() > MKConfig.MOTIVATION_CONFLICT_MAX_PAIRS) {
+                Map<String, Integer> tokenCounts = matrix.getTokenCounts(
+                        rawConflicts.stream()
+                                .flatMap(c -> java.util.stream.Stream.of(c.tokenA(), c.tokenB()))
+                                .distinct()
+                                .toList());
+                MemoryManager.TokenOccurrenceStats occStats = mem.getTokenOccurrenceStats(
+                        MKConfig.MOTIVATION_CONFLICT_COOCCUR_SCAN_LIMIT);
+                conflicts = ConflictDetector.filterSignificant(
+                        rawConflicts, tokenCounts, occStats, MKConfig.MOTIVATION_CONFLICT_MAX_PAIRS);
+                log.info("[ActionLoop] 🎯 冲突过滤: {}→{}(top-{})",
+                        rawConflicts.size(), conflicts.size(), MKConfig.MOTIVATION_CONFLICT_MAX_PAIRS);
+            } else {
+                conflicts = rawConflicts;
+            }
             MK65Debug.motivationQuery(dist, novelTokens, conflicts, overallVotes);
 
             // ★ 等价token
@@ -241,7 +261,6 @@ public class ActionLoop {
             }
 
             // ★ 自动经验检索
-            MemoryManager mem = MemoryManager.getInstance();
             java.util.List<MemoryManager.ExpMatch> autoMemories = mem.autoRecall(inputTokens, MKConfig.MEMORY_AUTO_RECALL_TOPN);
             MK65Debug.autoMemories(autoMemories);
 
@@ -402,7 +421,8 @@ public class ActionLoop {
                 // finish_action没建next_actions → 自动补一个
                 List<String> infoTools = toolRecords.stream()
                         .filter(r -> r.contains("recall") || r.contains("fetch_web")
-                                || r.contains("read_file") || r.contains("list_dir"))
+                                || r.contains("read_file") || r.contains("list_dir")
+                                || r.contains("get_chat_history"))
                         .toList();
                 if (!infoTools.isEmpty()) {
                     String brief = infoTools.size() == 1 ? infoTools.get(0)

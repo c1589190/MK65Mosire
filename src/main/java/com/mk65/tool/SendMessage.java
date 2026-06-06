@@ -36,7 +36,7 @@ public class SendMessage implements MKTool {
 
         ObjectNode fn = tool.putObject("function");
         fn.put("name", getName());
-        fn.put("description", "向目标发送消息。target为'console'时发送到控制台，'qq_group:群号'时发送到QQ群，'qqid:QQ号'时发送到QQ私聊。");
+        fn.put("description", "向目标发送消息。target直接复制消息中的[source:...]字段值：console / qq_group:群号 / qq_private:QQ号。");
 
         ObjectNode params = fn.putObject("parameters");
         params.put("type", "object");
@@ -45,11 +45,11 @@ public class SendMessage implements MKTool {
 
         ObjectNode target = props.putObject("target");
         target.put("type", "string");
-        target.put("description", "消息目标。console / qq_group:群号 / qqid:QQ号");
+        target.put("description", "消息目标。直接复制[source:...]的值：console / qq_group:群号 / qq_private:QQ号");
 
         ObjectNode messages = props.putObject("messages");
         messages.put("type", "array");
-        messages.put("description", "分段发送的消息内容数组。每个元素为一条消息文本。");
+        messages.put("description", "分段发送的消息内容数组。每元素为一条消息文本。@某人用 [@role:qqid:QQ号] 格式，群聊中会自动转为真正的@提及。");
         ObjectNode items = messages.putObject("items");
         items.put("type", "string");
 
@@ -82,7 +82,7 @@ public class SendMessage implements MKTool {
                         || target.startsWith("qq_private:")) {
                     res = sendToQQ(target, msg);
                 } else {
-                    res = "ERROR: 无法识别的 target 格式。支持: console, qq_group:群号, qqid:QQ号";
+                    res = "ERROR: 无法识别的 target 格式。支持: console, qq_group:群号, qq_private:QQ号";
                 }
 
                 resultBuilder.append(res).append("\n");
@@ -125,15 +125,16 @@ public class SendMessage implements MKTool {
             return "ERROR: QQ适配器未连接。";
         }
         try {
-            String resp;
+            // ★ 群聊中：把 [@role:qqid:123] 翻译为 Napcat CQ @提及码
             if (target.startsWith("qq_group:")) {
+                msg = translateAtMentions(msg);
                 long groupId = Long.parseLong(target.substring("qq_group:".length()));
-                resp = napcat.sendGroupMsg(groupId, msg);
+                String resp = napcat.sendGroupMsg(groupId, msg);
                 return parseQQResult(target, resp);
             } else {
                 int prefixLen = target.startsWith("qq_private:") ? "qq_private:".length() : "qqid:".length();
                 long userId = Long.parseLong(target.substring(prefixLen));
-                resp = napcat.sendPrivateMsg(userId, msg);
+                String resp = napcat.sendPrivateMsg(userId, msg);
                 return parseQQResult(target, resp);
             }
         } catch (NumberFormatException e) {
@@ -142,6 +143,11 @@ public class SendMessage implements MKTool {
             log.error("[SendMessage] QQ发送失败", e);
             return "ERROR: 发送失败 - " + e.getMessage();
         }
+    }
+
+    /** 把 [@role:qqid:123456] 翻译为 Napcat CQ 码 [CQ:at,qq=123456] */
+    private static String translateAtMentions(String msg) {
+        return msg.replaceAll("\\[@role:qqid:(\\d+)\\]", "[CQ:at,qq=$1]");
     }
 
     /** 解析Napcat API响应，识别禁言/封禁等异常状态 */

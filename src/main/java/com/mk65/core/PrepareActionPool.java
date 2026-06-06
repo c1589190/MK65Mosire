@@ -92,11 +92,13 @@ public class PrepareActionPool {
         String now = LocalDateTime.now().format(TIME_FMT);
         String combined = String.join("\n", bucket.messages);
         String label = source.startsWith("qq_group:") ? "QQ群聊(" + source.substring("qq_group:".length()) + ")"
+                : source.startsWith("qq_private:") ? "QQ私聊(" + source.substring("qq_private:".length()) + ")"
                 : source.startsWith("qqid:") ? "QQ私聊(" + source.substring("qqid:".length()) + ")"
                 : "来源(" + source + ")";
         String actionText = String.format("[%s] %s 聚合%d条: %s", now, label, bucket.messages.size(), combined);
 
-        double baseWeight = source.startsWith("qqid:") ? MKConfig.STIMULUS_PRIVATE_WEIGHT
+        double baseWeight = source.startsWith("qq_private:") ? MKConfig.STIMULUS_PRIVATE_WEIGHT
+                : source.startsWith("qqid:") ? MKConfig.STIMULUS_PRIVATE_WEIGHT
                 : source.startsWith("qq_group:") ? MKConfig.STIMULUS_GROUP_WEIGHT
                 : 0.5;
 
@@ -111,12 +113,12 @@ public class PrepareActionPool {
     }
 
     public void pushConsole(String rawText) {
-        String actionText = String.format("[%s] 控制台输入: %s", LocalDateTime.now().format(TIME_FMT), rawText);
+        String actionText = String.format("[source:console] [role:console] %s", rawText);
         push(new ActionInput(actionText, "console", rawText, MKConfig.STIMULUS_CONSOLE_WEIGHT));
     }
 
     public void pushInternal(String description, double priority) {
-        String actionText = String.format("[%s] 内部任务: %s", LocalDateTime.now().format(TIME_FMT), description);
+        String actionText = String.format("[source:internal] [role:system] %s", description);
         push(new ActionInput(actionText, "internal", description,
                 Math.max(0.0, Math.min(1.0, priority)) * MKConfig.STIMULUS_INTERNAL_WEIGHT));
     }

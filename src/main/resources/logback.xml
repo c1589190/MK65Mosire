@@ -16,8 +16,13 @@
         </encoder>
     </appender>
 
+    <appender name="RING" class="com.mk65.core.RingBufferAppender">
+        <capacity>500</capacity>
+    </appender>
+
     <root level="INFO">
         <appender-ref ref="STDOUT" />
         <appender-ref ref="FILE" />
+        <appender-ref ref="RING" />
     </root>
 </configuration>

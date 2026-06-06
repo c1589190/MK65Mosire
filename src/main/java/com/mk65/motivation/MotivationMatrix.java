@@ -40,6 +40,32 @@ public class MotivationMatrix {
         return INSTANCE;
     }
 
+    /**
+     * 查询每个 token 在 CoMatrix 中的总出现次数。
+     */
+    public Map<String, Integer> getTokenCounts(List<String> tokens) {
+        Map<String, Integer> result = new HashMap<>();
+        if (tokens.isEmpty()) return result;
+
+        String placeholders = String.join(",", Collections.nCopies(tokens.size(), "?"));
+        String sql = "SELECT input_token, SUM(count) as total FROM CoMatrix WHERE input_token IN (" + placeholders + ") GROUP BY input_token";
+
+        try (Connection conn = MKDB.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (int i = 0; i < tokens.size(); i++) {
+                ps.setString(i + 1, tokens.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.put(rs.getString("input_token"), rs.getInt("total"));
+                }
+            }
+        } catch (SQLException e) {
+            log.error("[MotivationMatrix] 查询token总数失败", e);
+        }
+        return result;
+    }
+
     // ==========================================
     // 查询：为动机报告提供数据
     // ==========================================
