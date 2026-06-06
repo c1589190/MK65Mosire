@@ -48,6 +48,10 @@ public class MKConfig {
     public static double LLM_CONTEXT_KEEP_RATIO = 0.30;
     public static int LLM_CONTEXT_DIGEST_MAX_CHARS = 3000;
 
+    // ========== 全局缓存重置阈值 ==========
+    public static int LLM_CACHE_MAX_ENTRIES = 40;
+    public static int LLM_CACHE_MAX_SIZE_CHARS = 200_000;
+
     // ========== 经验系统 ==========
     public static int MEMORY_AUTO_RECALL_TOPN = 3;
     public static int MEMORY_RECALL_MAX_RESULTS = 10;
@@ -136,6 +140,9 @@ public class MKConfig {
         LLM_CONTEXT_MAX_MESSAGES = getInt(props, "llm.context.maxMessages", LLM_CONTEXT_MAX_MESSAGES);
         LLM_CONTEXT_KEEP_RATIO = getDouble(props, "llm.context.keepRatio", LLM_CONTEXT_KEEP_RATIO);
         LLM_CONTEXT_DIGEST_MAX_CHARS = getInt(props, "llm.context.digestMaxChars", LLM_CONTEXT_DIGEST_MAX_CHARS);
+
+        LLM_CACHE_MAX_ENTRIES = getInt(props, "llm.cache.maxEntries", LLM_CACHE_MAX_ENTRIES);
+        LLM_CACHE_MAX_SIZE_CHARS = getInt(props, "llm.cache.maxSizeChars", LLM_CACHE_MAX_SIZE_CHARS);
 
         MEMORY_AUTO_RECALL_TOPN = getInt(props, "memory.autoRecallTopN", MEMORY_AUTO_RECALL_TOPN);
         MEMORY_RECALL_MAX_RESULTS = getInt(props, "memory.recallMaxResults", MEMORY_RECALL_MAX_RESULTS);

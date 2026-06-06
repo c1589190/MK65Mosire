@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -16,6 +17,9 @@ import java.util.concurrent.TimeUnit;
 /**
  * OpenAI 兼容 API 调用封装。
  * 维护全局消息列表，利用 API 层 prompt 前缀缓存提高命中率。
+ *
+ * 缓存策略：条目数或总大小超阈值时，清空全部缓存，
+ * 将最后30%内容压缩为文本摘要，拼接到下一轮首个user消息前面。
  */
 @Slf4j
 public class LLMAdapter {
@@ -29,14 +33,21 @@ public class LLMAdapter {
     private final double temperature;
     private final int maxTokens;
 
-    /** 全局消息列表 — system [+ 压缩摘要] + 最近N轮对话 */
+    /** 全局消息列表 — system + 最近N轮对话 */
     private final List<JsonNode> globalMessages = new ArrayList<>();
     private String systemPromptText = "";
 
-    private int maxMessages() { return MKConfig.LLM_CONTEXT_MAX_MESSAGES; }
-    private double keepRatio() { return MKConfig.LLM_CONTEXT_KEEP_RATIO; }
+    private int maxEntries() { return MKConfig.LLM_CACHE_MAX_ENTRIES; }
+    private int maxSizeChars() { return MKConfig.LLM_CACHE_MAX_SIZE_CHARS; }
     private int digestMaxChars() { return MKConfig.LLM_CONTEXT_DIGEST_MAX_CHARS; }
-    private static final int TOKEN_LIMIT_CHARS = 800_000; // ~1M token 的安全线
+    /** 清空时保留的后段比例 */
+    private static final double DIGEST_KEEP_RATIO = 0.30;
+    /** 单条消息摘要截断长度 */
+    private static final int SNIP_MAX_CHARS = 150;
+    /** tool消息摘要截断长度 */
+    private static final int TOOL_SNIP_MAX_CHARS = 80;
+    /** body 大小安全线 (~1M token) */
+    private static final int TOKEN_LIMIT_CHARS = 800_000;
 
     public LLMAdapter() {
         this.apiBase = MKConfig.BRAIN_API_BASE;
@@ -86,62 +97,70 @@ public class LLMAdapter {
      * @return LLMResult
      */
     public LLMResult chat(String userMessage, ArrayNode tools) {
-        // 先创建user消息（暂时不入globalMessages）
+        // ★ 1. 检查缓存是否超阈值（超了先重置，拿到后30%摘要）
+        String digest = maybeResetCache();
+
+        // ★ 2. 如果有摘要（刚重置过），拼接到user消息前面，确保LLM有上下连续性
+        if (digest != null) {
+            userMessage = "[上下文摘要] 以下是之前对话的压缩记录：\n\n" + digest
+                    + "\n\n---\n\n【当前输入】\n" + userMessage;
+        }
+
+        // 3. 创建user消息前，检查并修复：如果顶层已是user，删除旧的避免连续重复
+        repairTopUserDuplicate();
+
         ObjectNode userMsg = mapper.createObjectNode();
         userMsg.put("role", "user");
         userMsg.put("content", userMessage);
+        globalMessages.add(userMsg);
 
-        // ★ 合并：如果已有摘要user消息（索引1），新消息追到摘要后面
-        if (globalMessages.size() > 1
-                && "user".equals(globalMessages.get(1).path("role").asText(""))
-                && globalMessages.get(1).path("content").asText("").startsWith("[上下文摘要]")) {
-            String merged = globalMessages.get(1).path("content").asText("")
-                    + "\n\n---\n\n【当前输入】\n" + userMessage;
-            ((com.fasterxml.jackson.databind.node.ObjectNode) globalMessages.get(1)).put("content", merged);
-            // 不单独添加userMsg，不产生连续user
-        } else {
+        // 4. 构建请求体
+        ObjectNode body = buildRequestBody(tools);
+
+        // ★ 5. 紧急保护：请求体过大时强制重置
+        if (body.toString().length() > TOKEN_LIMIT_CHARS) {
+            log.warn("[LLM] ⚠️ 请求体过大({}chars), 紧急重置", body.toString().length());
+            // 先移除刚加的user消息
+            if (!globalMessages.isEmpty()
+                    && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
+                globalMessages.remove(globalMessages.size() - 1);
+            }
+            digest = resetCacheAndDigest();
+            if (digest != null) {
+                userMessage = "[上下文摘要] 以下是之前对话的压缩记录：\n\n" + digest
+                        + "\n\n---\n\n【当前输入】\n" + userMessage;
+            }
+            userMsg.put("content", userMessage);
+            // 摘要重置后缓存只剩 system，再次确保无重复user
+            repairTopUserDuplicate();
             globalMessages.add(userMsg);
+            body = buildRequestBody(tools);
         }
 
-        // 超限压缩
-        compressContext();
-
-        // ★ token超限保护：body过大时强制压缩再试
-        ObjectNode body = buildRequestBody(tools);
-        if (body.toString().length() > TOKEN_LIMIT_CHARS) {
-            log.warn("[LLM] ⚠️ 请求体过大({}chars), 强制压缩", body.toString().length());
-            forceCompress();
-            // 合并新消息到压缩后的摘要
-            if (globalMessages.size() > 1
-                    && "user".equals(globalMessages.get(1).path("role").asText(""))
-                    && globalMessages.get(1).path("content").asText("").startsWith("[上下文摘要]")) {
-                String merged = globalMessages.get(1).path("content").asText("")
-                        + "\n\n---\n\n【当前输入】\n" + userMessage;
-                ((com.fasterxml.jackson.databind.node.ObjectNode) globalMessages.get(1)).put("content", merged);
-            } else {
+        // 6. 验证消息序列合法性（兜底：非法时外科修复，不清空全缓存）
+        String seqError = validateMessageSequence();
+        if (seqError != null) {
+            log.error("[LLM] ⚠️ 消息序列非法, 外科修复: {}", seqError);
+            repairTopUserDuplicate();
+            repairToolSequence();
+            // 再次验证，仍非法才全清
+            seqError = validateMessageSequence();
+            if (seqError != null) {
+                log.error("[LLM] ⚠️ 外科修复无效, 全清重建: {}", seqError);
+                globalMessages.clear();
+                ObjectNode sys = mapper.createObjectNode();
+                sys.put("role", "system");
+                sys.put("content", systemPromptText);
+                globalMessages.add(sys);
                 globalMessages.add(userMsg);
             }
             body = buildRequestBody(tools);
         }
 
-        // 验证序列
-        String seqError = validateMessageSequence();
-        if (seqError != null) {
-            log.error("[LLM] ⚠️ 消息序列非法, 重置: {}", seqError);
-            globalMessages.clear();
-            ObjectNode sys = mapper.createObjectNode();
-            sys.put("role", "system");
-            sys.put("content", systemPromptText);
-            globalMessages.add(sys);
-            globalMessages.add(userMsg);
-            body = buildRequestBody(tools);
-        }
-
-        // 计算请求体大小和消息概要
+        // 7. 计算请求体大小和消息概要
         String bodyStr = body.toString();
-        int bodyBytes = bodyStr.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        int bodyBytes = bodyStr.getBytes(StandardCharsets.UTF_8).length;
 
-        // 每条消息的角色顺序
         StringBuilder msgSizes = new StringBuilder();
         for (int i = 0; i < globalMessages.size(); i++) {
             JsonNode m = globalMessages.get(i);
@@ -193,14 +212,15 @@ public class LLMAdapter {
                 }
                 String respStr = resp.body().string();
                 log.info("[LLM] 📥 响应 {}ms | body={}KB | HTTP {}",
-                        elapsed, String.format("%.1f", respStr.getBytes(java.nio.charset.StandardCharsets.UTF_8).length / 1024.0),
+                        elapsed, String.format("%.1f", respStr.getBytes(StandardCharsets.UTF_8).length / 1024.0),
                         resp.code());
                 JsonNode root = mapper.readTree(respStr);
                 return parseAndCache(root, elapsed);
             }
         } catch (Exception e) {
             long elapsed = System.currentTimeMillis() - startMs;
-            if (!globalMessages.isEmpty() && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
+            if (!globalMessages.isEmpty()
+                    && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
                 globalMessages.remove(globalMessages.size() - 1);
             }
             log.error("[LLM] ❌ 调用失败 ({}ms): {}", elapsed, e.getMessage());
@@ -211,15 +231,21 @@ public class LLMAdapter {
     /**
      * 将工具执行结果作为 tool role 消息追加到全局列表。
      * 调用时机：每执行完一个工具后立即调用。
+     * 如果顶层已是 tool（上一条 assistant 已被清除），先移除旧 tool 避免连续重复。
      */
     public void appendToolResult(String toolCallId, String toolName, String result) {
+        // 外科防护：顶层已是 tool → 删除旧的（可能来自损坏的缓存）
+        if (!globalMessages.isEmpty()
+                && "tool".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
+            globalMessages.remove(globalMessages.size() - 1);
+            log.warn("[LLM] 🔧 移除连续tool重复, 再追加 tool={}", toolName);
+        }
         ObjectNode toolMsg = mapper.createObjectNode();
         toolMsg.put("role", "tool");
         toolMsg.put("tool_call_id", toolCallId);
         toolMsg.put("name", toolName);
         toolMsg.put("content", result != null ? result : "");
         globalMessages.add(toolMsg);
-        compressContext();
     }
 
     /**
@@ -244,7 +270,6 @@ public class LLMAdapter {
             }
         }
         globalMessages.add(assistant);
-        compressContext();
     }
 
     public int getMessageCount() {
@@ -283,6 +308,36 @@ public class LLMAdapter {
         return null;
     }
 
+    /**
+     * 外科修复：如果缓存顶层已是 user 消息，删除它。
+     * 在添加新 user 消息前调用，防止 user→user 连续重复。
+     */
+    private void repairTopUserDuplicate() {
+        if (!globalMessages.isEmpty()
+                && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
+            int removed = globalMessages.size() - 1;
+            globalMessages.remove(removed);
+            log.warn("[LLM] 🔧 移除顶层重复user (索引{}), 缓存剩余{}条", removed, globalMessages.size());
+        }
+    }
+
+    /**
+     * 外科修复：如果存在连续 tool 消息（孤儿tool），移除旧的。
+     * tool 必须在 assistant(tool_calls) 之后，无 assistant 的 tool 是孤儿。
+     */
+    private void repairToolSequence() {
+        for (int i = globalMessages.size() - 1; i >= 1; i--) {
+            String role = globalMessages.get(i).path("role").asText("");
+            if ("tool".equals(role)) {
+                String prevRole = globalMessages.get(i - 1).path("role").asText("");
+                if ("tool".equals(prevRole)) {
+                    globalMessages.remove(i - 1);
+                    log.warn("[LLM] 🔧 移除连续tool重复 (索引{}和{})", i - 1, i);
+                }
+            }
+        }
+    }
+
     // ==========================================
     // 内部
     // ==========================================
@@ -291,7 +346,8 @@ public class LLMAdapter {
         JsonNode choices = root.path("choices");
         if (!choices.isArray() || choices.isEmpty()) {
             // 失败时移除用户消息
-            if (!globalMessages.isEmpty() && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
+            if (!globalMessages.isEmpty()
+                    && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
                 globalMessages.remove(globalMessages.size() - 1);
             }
             return LLMResult.error("LLM返回空choices", elapsedMs);
@@ -324,125 +380,106 @@ public class LLMAdapter {
         return new LLMResult(content, tcList, elapsedMs, false);
     }
 
+    // ==========================================
+    // 缓存重置
+    // ==========================================
+
     /**
-     * 强制压缩（不管消息条数是否超限，token爆炸保护）。
+     * 检查缓存是否超阈值（条目数 或 总大小）。
+     * 如需要重置，清空缓存并返回后30%的文本摘要。
+     *
+     * @return 摘要文本，null表示不需要重置
      */
-    private void forceCompress() {
-        if (globalMessages.size() <= 3) return; // system + 摘要 + user 已经压不了
+    private String maybeResetCache() {
+        int entryCount = globalMessages.size();
+        int totalSize = calculateTotalContentSize();
 
-        // 1. 收集已有摘要
-        String oldDigest = "";
-        if (globalMessages.size() > 1
-                && "user".equals(globalMessages.get(1).path("role").asText(""))
-                && globalMessages.get(1).path("content").asText("").startsWith("[上下文摘要]")) {
-            oldDigest = globalMessages.get(1).path("content").asText("");
+        if (entryCount <= maxEntries() && totalSize <= maxSizeChars()) {
+            return null;
+        }
+        if (globalMessages.size() <= 1) {
+            return null; // 只有system prompt，无需重置
         }
 
-        // 2. 扫描最近N条压缩
-        int keepCount = Math.max(2, (int) ((globalMessages.size() - 1) * 0.15)); // 只保留15%
-        int splitIndex = globalMessages.size() - keepCount;
-
-        // 后30%中只保留从第一个user开始的消息（跳过残余tool/assistant）
-        while (splitIndex < globalMessages.size()
-                && !"user".equals(globalMessages.get(splitIndex).path("role").asText(""))) {
-            splitIndex++;
-        }
-
-        StringBuilder sb = new StringBuilder(oldDigest);
-        if (!oldDigest.isBlank()) sb.append("\n---\n");
-        sb.append("[最近压缩]\n");
-
-        for (int i = Math.max(1, splitIndex - 20); i < splitIndex; i++) {
-            JsonNode msg = globalMessages.get(i);
-            String role = msg.path("role").asText("");
-            String content = msg.path("content").asText("");
-            if (content.isBlank()) continue;
-            String snip = content.length() > 120 ? content.substring(0, 120) + "..." : content;
-            sb.append("  [").append(role).append("] ").append(snip.replace("\n", " ")).append("\n");
-        }
-
-        String digest = sb.toString().trim();
-        if (digest.length() > digestMaxChars()) digest = digest.substring(0, digestMaxChars()) + "...[截断]";
-
-        // 保留从splitIndex开始的有效消息
-        List<JsonNode> keep = new ArrayList<>();
-        for (int i = splitIndex; i < globalMessages.size(); i++) keep.add(globalMessages.get(i));
-
-        globalMessages.clear();
-        ObjectNode sys = mapper.createObjectNode();
-        sys.put("role", "system");
-        sys.put("content", systemPromptText);
-        globalMessages.add(sys);
-        ObjectNode dm = mapper.createObjectNode();
-        dm.put("role", "user");
-        dm.put("content", "[上下文摘要] 以下是之前对话的压缩记录：\n\n" + digest);
-        globalMessages.add(dm);
-        globalMessages.addAll(keep);
-
-        log.info("[LLM] 🔄 强制压缩: →{}条 (摘要{}chars)", globalMessages.size(), digest.length());
+        return resetCacheAndDigest();
     }
 
     /**
-     * 普通压缩：超限时前70%丢弃，后30%原样保留并压缩摘要。
+     * 执行缓存重置：
+     * 1. 取非system消息的最后30%转为文本摘要
+     * 2. 清空全部缓存
+     * 3. 重建system prompt（保持结构正常）
+     *
+     * @return 后30%的文本摘要
      */
-    private void compressContext() {
-        if (globalMessages.size() <= maxMessages()) return;
-
-        String oldDigest = "";
-        if (globalMessages.size() > 1
-                && "user".equals(globalMessages.get(1).path("role").asText(""))
-                && globalMessages.get(1).path("content").asText("").startsWith("[上下文摘要]")) {
-            oldDigest = globalMessages.get(1).path("content").asText("");
-        }
-
-        int nonSystemCount = globalMessages.size() - 1 - (oldDigest.isEmpty() ? 0 : 1);
-        int keepCount = Math.max(2, (int) (nonSystemCount * keepRatio()));
-        int splitIndex = globalMessages.size() - keepCount;
-
-        // ★ 后30%从第一个user开始（跳过残留的tool/assistant）
-        while (splitIndex < globalMessages.size()
-                && !"user".equals(globalMessages.get(splitIndex).path("role").asText(""))) {
-            splitIndex++;
-        }
+    private String resetCacheAndDigest() {
+        int nonSystemCount = globalMessages.size() - 1;
+        int keepCount = Math.max(1, (int) (nonSystemCount * DIGEST_KEEP_RATIO));
+        int summarizeFrom = globalMessages.size() - keepCount;
+        int discardedCount = nonSystemCount - keepCount;
 
         StringBuilder sb = new StringBuilder();
-        if (!oldDigest.isBlank()) sb.append(oldDigest).append("\n---\n");
-        sb.append("[最近 ").append(keepCount).append(" 条消息的压缩]\n");
+        sb.append("[缓存重置 — 前").append(discardedCount).append("条已舍弃，保留后").append(keepCount).append("条摘要]\n");
 
-        for (int i = Math.max(1, splitIndex - 30); i < splitIndex; i++) {
+        for (int i = summarizeFrom; i < globalMessages.size(); i++) {
             JsonNode msg = globalMessages.get(i);
             String role = msg.path("role").asText("");
             String content = msg.path("content").asText("");
-            if (content.isBlank()) continue;
-            if ("tool".equals(role)) {
+
+            if (content.isBlank() && msg.has("tool_calls")) {
+                JsonNode tc = msg.path("tool_calls");
+                int tcCount = tc.isArray() ? tc.size() : 0;
+                sb.append("  [assistant] 调用").append(tcCount).append("个工具\n");
+            } else if ("tool".equals(role)) {
                 String name = msg.path("name").asText("");
-                String snip = content.length() > 80 ? content.substring(0, 80) + "..." : content;
-                sb.append("  [").append(name).append("] ").append(snip.replace("\n", " ")).append("\n");
-            } else {
-                String snip = content.length() > 150 ? content.substring(0, 150) + "..." : content;
+                String snip = content.length() > TOOL_SNIP_MAX_CHARS
+                        ? content.substring(0, TOOL_SNIP_MAX_CHARS) + "..." : content;
+                sb.append("  [tool:").append(name).append("] ").append(snip.replace("\n", " ")).append("\n");
+            } else if (!content.isBlank()) {
+                String snip = content.length() > SNIP_MAX_CHARS
+                        ? content.substring(0, SNIP_MAX_CHARS) + "..." : content;
                 sb.append("  [").append(role).append("] ").append(snip.replace("\n", " ")).append("\n");
             }
         }
 
         String digest = sb.toString().trim();
-        if (digest.length() > digestMaxChars()) digest = digest.substring(0, digestMaxChars()) + "...[截断]";
+        if (digest.length() > digestMaxChars()) {
+            digest = digest.substring(0, digestMaxChars()) + "...[截断]";
+        }
 
-        List<JsonNode> keep = new ArrayList<>();
-        for (int i = splitIndex; i < globalMessages.size(); i++) keep.add(globalMessages.get(i));
+        int oldCount = globalMessages.size();
 
+        // 清空并重建
         globalMessages.clear();
         ObjectNode sys = mapper.createObjectNode();
         sys.put("role", "system");
         sys.put("content", systemPromptText);
         globalMessages.add(sys);
-        ObjectNode dm = mapper.createObjectNode();
-        dm.put("role", "user");
-        dm.put("content", "[上下文摘要] 以下是之前对话的压缩记录：\n\n" + digest);
-        globalMessages.add(dm);
-        globalMessages.addAll(keep);
 
-        log.info("[LLM] 🔄 压缩: {}条→{}条 (摘要{}chars, 保留{}条)",
-                keep.size() + (splitIndex - 1) + 2, globalMessages.size(), digest.length(), keep.size());
+        log.info("[LLM] 🔄 缓存重置: {}条 → 清空, 后30%({}条)→摘要({}chars)",
+                oldCount, oldCount - summarizeFrom, digest.length());
+
+        return digest;
+    }
+
+    /**
+     * 计算globalMessages中所有消息的内容总大小（字符数）。
+     */
+    private int calculateTotalContentSize() {
+        int total = 0;
+        for (JsonNode msg : globalMessages) {
+            String content = msg.path("content").asText("");
+            total += content.length();
+            JsonNode tc = msg.path("tool_calls");
+            if (tc.isArray()) {
+                total += tc.toString().length();
+            }
+            String name = msg.path("name").asText("");
+            if (!name.isBlank()) {
+                total += name.length();
+            }
+        }
+        return total;
     }
 
     /** 构建请求体（复用逻辑） */

@@ -10,3 +10,4 @@ application.properties
 dependency-reduced-pom.xml
 test/*.jar
 test/*.jar:Zone.Identifier
+mk65.log
