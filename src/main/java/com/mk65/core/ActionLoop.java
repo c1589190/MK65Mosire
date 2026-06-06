@@ -222,6 +222,9 @@ public class ActionLoop {
         // ★ 重置每轮结算收集器
         com.mk65.tool.FinishAction.resetRound();
 
+        // ★ 标记处理中：同源消息将无视定时器持续累加
+        actionPool.setProcessing(true);
+
         try {
             // ── 1. 分词 ──
             List<String> inputTokens = tokenizer.segment(input.actionText());
@@ -443,6 +446,9 @@ public class ActionLoop {
 
         } catch (Exception e) {
             log.error("[ActionLoop] ❌ 第{}轮处理异常", round, e);
+        } finally {
+            // ★ 处理结束：flush累加的消息
+            actionPool.setProcessing(false);
         }
     }
 

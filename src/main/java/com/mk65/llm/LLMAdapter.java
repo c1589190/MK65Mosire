@@ -495,6 +495,17 @@ public class LLMAdapter {
             body.set("tools", tools);
             body.put("tool_choice", "auto");
         }
+
+        // ★ 思维链控制 (DeepSeek thinking/reasoning)
+        if (MKConfig.BRAIN_THINKING_ENABLED) {
+            ObjectNode thinking = mapper.createObjectNode();
+            thinking.put("type", "enabled");
+            if (MKConfig.BRAIN_THINKING_BUDGET_TOKENS > 0) {
+                thinking.put("budget_tokens", MKConfig.BRAIN_THINKING_BUDGET_TOKENS);
+            }
+            body.set("thinking", thinking);
+        }
+
         return body;
     }
 

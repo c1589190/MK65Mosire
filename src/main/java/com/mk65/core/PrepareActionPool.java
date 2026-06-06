@@ -29,6 +29,11 @@ public class PrepareActionPool {
     private final ConcurrentHashMap<String, MessageBucket> buckets = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> cooldowns = new ConcurrentHashMap<>();
 
+    /** LLM 是否正在处理 — 处理期间新消息无视定时器持续累加 */
+    private volatile boolean isProcessing = false;
+    /** 处理期间的累加器: source → 累加的消息段 */
+    private final ConcurrentHashMap<String, ProcessingAccumulator> processingAccums = new ConcurrentHashMap<>();
+
     private static final int DEFAULT_CAPACITY = 64;
 
     // ── 外源刺激计算需要的上下文（由 ActionLoop 每轮注入）──
@@ -53,6 +58,15 @@ public class PrepareActionPool {
     // ═══════════════════════════════════════════
 
     public void pushExternal(String source, String rawText) {
+        // ★ LLM 处理中：无视冷却和定时器，直接累加到 processingAccums
+        if (isProcessing) {
+            ProcessingAccumulator acc = processingAccums.computeIfAbsent(source,
+                    k -> new ProcessingAccumulator());
+            acc.append(rawText);
+            return;
+        }
+
+        // ── 正常模式：使用消息桶 + 定时器聚合 ──
         Long cooldownUntil = cooldowns.get(source);
         if (cooldownUntil != null && System.currentTimeMillis() < cooldownUntil) return;
 
@@ -206,6 +220,79 @@ public class PrepareActionPool {
     }
     public void shutdown() {
         flushAll(); flushScheduler.shutdown(); pool.clear();
+    }
+
+    // ═══════════════════════════════════════════
+    // 处理中累加
+    // ═══════════════════════════════════════════
+
+    /** ActionLoop 调用：标记 LLM 开始/结束处理 */
+    public void setProcessing(boolean processing) {
+        boolean wasProcessing = this.isProcessing;
+        this.isProcessing = processing;
+
+        // ★ 处理结束时，把累加的消息一次性全部flush
+        if (wasProcessing && !processing) {
+            flushProcessingAccumulators();
+        }
+    }
+
+    /**
+     * 将处理期间累加的所有同源消息 flush 为 ActionInput。
+     * 每个 source 产出一个聚合 ActionInput。
+     */
+    private void flushProcessingAccumulators() {
+        if (processingAccums.isEmpty()) return;
+
+        List<String> sources = new ArrayList<>(processingAccums.keySet());
+        for (String source : sources) {
+            ProcessingAccumulator acc = processingAccums.remove(source);
+            if (acc == null || acc.segments.isEmpty()) continue;
+
+            String now = java.time.LocalDateTime.now().format(TIME_FMT);
+            String combined = acc.flush();
+            String label = source.startsWith("qq_group:") ? "QQ群聊(" + source.substring("qq_group:".length()) + ")"
+                    : source.startsWith("qq_private:") ? "QQ私聊(" + source.substring("qq_private:".length()) + ")"
+                    : source.startsWith("qqid:") ? "QQ私聊(" + source.substring("qqid:".length()) + ")"
+                    : "来源(" + source + ")";
+
+            int trimmedCount = acc.trimmedCount;
+            String trimNote = trimmedCount > 0 ? " (处理期间累加, 裁剪" + trimmedCount + "条旧消息)" : " (处理期间累加)";
+            String actionText = String.format("[%s] %s 聚合%d条%s: %s",
+                    now, label, acc.segments.size(), trimNote, combined);
+
+            double baseWeight = source.startsWith("qq_private:") ? MKConfig.STIMULUS_PRIVATE_WEIGHT
+                    : source.startsWith("qqid:") ? MKConfig.STIMULUS_PRIVATE_WEIGHT
+                    : source.startsWith("qq_group:") ? MKConfig.STIMULUS_GROUP_WEIGHT
+                    : 0.5;
+
+            push(new ActionInput(actionText, source, combined, baseWeight));
+            log.info("[Pool] 🔄 处理结束flush: source={}, 累加{}条, {}chars, 裁剪{}条",
+                    source, acc.segments.size(), combined.length(), trimmedCount);
+        }
+    }
+
+    /** 处理期间的累加器：持续追加消息，超出上限从顶部裁剪 */
+    private static class ProcessingAccumulator {
+        final List<String> segments = new ArrayList<>();
+        int totalChars = 0;
+        int trimmedCount = 0;
+
+        void append(String text) {
+            segments.add(text);
+            totalChars += text.length();
+
+            // 超出上限 → 从顶部裁剪旧消息（保留至少1条）
+            while (totalChars > MKConfig.POOL_PROCESSING_MAX_CHARS && segments.size() > 1) {
+                String removed = segments.remove(0);
+                totalChars -= removed.length();
+                trimmedCount++;
+            }
+        }
+
+        String flush() {
+            return String.join("\n", segments);
+        }
     }
 
     // ═══════════════════════════════════════════
