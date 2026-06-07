@@ -1,0 +1,323 @@
+# ==========================================
+# MK65Mosire 完整配置文件 (自动生成)
+# 生成时间: 2026-06-07 00:41:41
+# 
+# 标记说明:
+#   [文件] = 值来自 application.properties
+#   [环境] = 值来自环境变量
+#   [默认] = 使用内置默认值 (未在文件中显式配置)
+# 
+# 用法:
+#   1. 复制此文件为 application.properties 即可获得完整配置模板
+#   2. 修改需要的字段后重启生效
+#   3. 空字符串表示未配置 (如 API key)
+# ==========================================
+
+# ──────────────────────────────────────────
+# LLM 大脑模型
+# ──────────────────────────────────────────
+# LLM API 地址 (OpenAI 兼容)
+# 默认: http://127.0.0.1:3000/v1  |  来源: [文件]
+llm.brain.apiBase               = http://127.0.0.1:3000/v1
+
+# LLM API 密钥 (支持 SILICONFLOW_API_KEY 环境变量)
+# 默认:   |  来源: [文件]
+llm.brain.apiKey                = 
+
+# 对话模型名称
+# 默认: deepseek-v4-flash-max  |  来源: [文件]
+llm.brain.chatModel             = deepseek-v4-flash-max
+
+# 生成温度 (0~2, 越低越确定)
+# 默认: 0.6  |  来源: [文件]
+llm.brain.temperature           = 0.6
+
+# 单次响应最大 token 数
+# 默认: 65535  |  来源: [文件]
+llm.brain.maxTokens             = 65535
+
+# 是否启用流式响应
+# 默认: true  |  来源: [文件]
+llm.brain.stream                = true
+
+# 是否启用思维链 (DeepSeek thinking/reasoning, 开启后响应变慢但推理更深)
+# 默认: false  |  来源: [默认]
+llm.brain.thinkingEnabled       = false
+
+# 思维链预算 token 数 (仅在启用时生效, 0=不限制)
+# 默认: 2048  |  来源: [默认]
+llm.brain.thinkingBudgetTokens  = 2048
+
+# ──────────────────────────────────────────
+# 视觉识别 (识图LLM)
+# ──────────────────────────────────────────
+# 是否启用图片识别 (关闭可避免VLM模型不兼容错误)
+# 默认: true  |  来源: [文件]
+vision.enabled     = true
+
+# 视觉 API 地址 (为空则复用 llm.brain.apiBase)
+# 默认: (复用brain)  |  来源: [文件]
+vision.apiBase     = http://127.0.0.1:3000/v1
+
+# 视觉 API 密钥 (为空则复用 llm.brain.apiKey)
+# 默认: (复用brain)  |  来源: [文件]
+vision.apiKey      = (空)
+
+# 视觉模型 (为空则复用 llm.brain.chatModel, 需支持多模态!)
+# 默认: (复用brain)  |  来源: [文件]
+vision.model       = deepseek-v4-flash-max
+
+# 图片描述最大 token 数
+# 默认: 200  |  来源: [文件]
+vision.maxTokens   = 200
+
+# 单张图片识别超时秒数
+# 默认: 15  |  来源: [文件]
+vision.timeoutSec  = 15
+
+# 单条消息最多识别图片数
+# 默认: 6  |  来源: [文件]
+vision.maxImages   = 6
+
+# ──────────────────────────────────────────
+# NapcatQQ 适配器
+# ──────────────────────────────────────────
+# WebSocket 连接地址
+# 默认: 127.0.0.1  |  来源: [文件]
+napcat.wsUrl    = 127.0.0.1
+
+# WebSocket 端口
+# 默认: 3001  |  来源: [文件]
+napcat.wsPort   = 3001
+
+# HTTP API 地址
+# 默认: http://127.0.0.1:3000  |  来源: [文件]
+napcat.httpUrl  = http://127.0.0.1:3000
+
+# Napcat 访问令牌
+# 默认:   |  来源: [文件]
+napcat.token    = 
+
+# ──────────────────────────────────────────
+# 搜索服务
+# ──────────────────────────────────────────
+# Brave Search API 密钥
+# 默认:   |  来源: [文件]
+search.braveApiKey   = 
+
+# MetaSo 搜索 API 密钥
+# 默认:   |  来源: [文件]
+search.metasoApiKey  = 
+
+# ──────────────────────────────────────────
+# 工作区
+# ──────────────────────────────────────────
+# Bot 文件读写的工作目录
+# 默认: workspace  |  来源: [文件]
+workspace.dir  = workspace
+
+# ──────────────────────────────────────────
+# 认知循环
+# ──────────────────────────────────────────
+# 主循环 tick 间隔 (毫秒)
+# 默认: 2000  |  来源: [文件]
+core.tickMs           = 2000
+
+# 单轮 LLM 调用超时 (秒)
+# 默认: 180  |  来源: [文件]
+core.roundTimeoutSec  = 180
+
+# ──────────────────────────────────────────
+# 全局上下文缓存
+# ──────────────────────────────────────────
+# 消息列表最大条数 (超过触发压缩)
+# 默认: 42  |  来源: [文件]
+llm.context.maxMessages     = 42
+
+# 压缩时保留后段比例 (0~1)
+# 默认: 0.30  |  来源: [文件]
+llm.context.keepRatio       = 0.3
+
+# 压缩摘要最大字符数
+# 默认: 3000  |  来源: [文件]
+llm.context.digestMaxChars  = 3000
+
+# 触发缓存重置的消息条数阈值
+# 默认: 40  |  来源: [默认]
+llm.cache.maxEntries        = 40
+
+# 触发缓存重置的总字符数阈值
+# 默认: 200000  |  来源: [默认]
+llm.cache.maxSizeChars      = 200000
+
+# ──────────────────────────────────────────
+# 动机模型
+# ──────────────────────────────────────────
+# 行动冲突检测阈值 (0~1, 越低越敏感)
+# 默认: 0.5  |  来源: [文件]
+motivation.conflictThreshold            = 0.5
+
+# 新异 token 判定: 累计出现次数低于此值视为新异
+# 默认: 3  |  来源: [文件]
+motivation.noveltyMinCount              = 3
+
+# 共现计数半衰期 (轮次)
+# 默认: 500  |  来源: [文件]
+motivation.decayHalfLife                = 500.0
+
+# 真空清理: 计数低于此值的行可被删除
+# 默认: 1  |  来源: [文件]
+motivation.vacuumThreshold              = 1
+
+# 动机报告中最多展示几条关联历史经验
+# 默认: 5  |  来源: [文件]
+motivation.report.maxExperiences        = 5
+
+# 冲突对最大保留数 (写入DB和注入prompt)
+# 默认: 50  |  来源: [文件]
+motivation.conflict.maxPairs            = 50
+
+# 冲突 token 最少累计出现次数 (碎片过滤)
+# 默认: 5  |  来源: [文件]
+motivation.conflict.minTokenCount       = 5
+
+# 共现统计扫描最近多少条经验
+# 默认: 300  |  来源: [文件]
+motivation.conflict.cooccurScanLimit    = 300
+
+# 冲突方案文本在 prompt 中的最大总字符数
+# 默认: 8000  |  来源: [文件]
+motivation.conflict.maxResolutionChars  = 8000
+
+# 冲突度多高才在报告中显示 (旧阈值保留)
+# 默认: 0.5  |  来源: [文件]
+motivation.oppositionThreshold          = 0.5
+
+# coMatrix 行向量相似度多高视为等价 token
+# 默认: 0.6  |  来源: [文件]
+motivation.equivalentTokenThreshold     = 0.6
+
+# ──────────────────────────────────────────
+# 经验系统
+# ──────────────────────────────────────────
+# 自动检索匹配的经验条数 (Jaccard 推送给 LLM)
+# 默认: 3  |  来源: [文件]
+memory.autoRecallTopN       = 3
+
+# 关键词搜索最大返回条数 (recall 工具)
+# 默认: 10  |  来源: [文件]
+memory.recallMaxResults     = 10
+
+# 自动检索扫描的最近经验条数上限
+# 默认: 500  |  来源: [文件]
+memory.autoRecallScanLimit  = 500
+
+# 经验权重公式中 helpful_count 的缩放因子
+# 默认: 0.5  |  来源: [文件]
+memory.helpfulScaleFactor   = 0.5
+
+# ──────────────────────────────────────────
+# 消息聚合
+# ──────────────────────────────────────────
+# 同源消息聚合等待时间 (毫秒)
+# 默认: 5000  |  来源: [文件]
+msg.aggregateWaitMs       = 3000
+
+# 聚合后同一来源冷却时间 (毫秒)
+# 默认: 5000  |  来源: [文件]
+msg.aggregateCooldownMs   = 5000
+
+# 聚合最大消息数 (攒够此数立即 flush)
+# 默认: 5  |  来源: [文件]
+msg.aggregateMaxMessages  = 5
+
+# 私聊最低聚合消息数 (1=立即响应)
+# 默认: 1  |  来源: [文件]
+msg.aggregatePrivateMin   = 1
+
+# 群聊最低聚合消息数
+# 默认: 3  |  来源: [文件]
+msg.aggregateGroupMin     = 3
+
+# 总字符数超过此值立即 flush
+# 默认: 200  |  来源: [默认]
+msg.aggregateCharFlush    = 200
+
+# 每个字符减少的等待毫秒数
+# 默认: 20  |  来源: [默认]
+msg.aggregateMsPerChar    = 20.0
+
+# 最低等待毫秒 (防止 0 等待)
+# 默认: 500  |  来源: [默认]
+msg.aggregateMinWaitMs    = 500
+
+# ──────────────────────────────────────────
+# 外源刺激权重
+# ──────────────────────────────────────────
+# 私聊消息的刺激权重
+# 默认: 0.7  |  来源: [默认]
+stimulus.privateWeight   = 0.7
+
+# 群聊消息的刺激权重
+# 默认: 0.5  |  来源: [默认]
+stimulus.groupWeight     = 0.5
+
+# 控制台输入的刺激权重
+# 默认: 0.8  |  来源: [默认]
+stimulus.consoleWeight   = 0.8
+
+# 内部自动刺激的权重
+# 默认: 0.3  |  来源: [默认]
+stimulus.internalWeight  = 0.3
+
+# 消息长度除数 (越长单位权重越低)
+# 默认: 20  |  来源: [默认]
+stimulus.lengthDivisor   = 20
+
+# ──────────────────────────────────────────
+# 行动池
+# ──────────────────────────────────────────
+# 等待中 action 每轮的权重增量
+# 默认: 0.01  |  来源: [默认]
+pool.waitingWeight       = 0.01
+
+# 内源 boost 的边际增量
+# 默认: 0.01  |  来源: [默认]
+pool.endogenousMargin    = 0.01
+
+# LLM处理期间同源消息累加最大字符数 (超出从顶部裁剪旧内容)
+# 默认: 3000  |  来源: [默认]
+pool.processingMaxChars  = 3000
+
+# ──────────────────────────────────────────
+# 聊天历史
+# ──────────────────────────────────────────
+# 自动拉取的聊天历史条数
+# 默认: 10  |  来源: [默认]
+chat.historyAutoCount  = 10
+
+# get_chat_history 工具拉取的条数
+# 默认: 48  |  来源: [默认]
+chat.historyToolCount  = 48
+
+# ──────────────────────────────────────────
+# 数据库
+# ──────────────────────────────────────────
+# SQLite 数据库 JDBC URL
+# 默认: jdbc:sqlite:mk65_motivation.db  |  来源: [文件]
+db.url  = jdbc:sqlite:mk65_motivation.db
+
+# ──────────────────────────────────────────
+# 调试
+# ──────────────────────────────────────────
+# 启动时自动开启 DEBUG 日志
+# 默认: false  |  来源: [文件]
+debug.autoEnable  = false
+
+# ──────────────────────────────────────────
+# 配置管理
+# ──────────────────────────────────────────
+# 启动时自动写出完整配置文件 application.properties.full
+# 默认: true  |  来源: [默认]
+config.autoComplete  = true
+

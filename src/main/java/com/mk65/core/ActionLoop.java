@@ -236,25 +236,11 @@ public class ActionLoop {
             List<ConflictDetector.ConflictPair> rawConflicts = ConflictDetector.detectConflicts(dist);
             Map<String, Double> overallVotes = computeOverallVotes(dist);
 
-            // ★ 共现过滤：只保留最有意义的冲突对（碎片token和从不共现的token对自然消解）
+            // ★ Token中心化冲突排名：按每个token的冲突度数排名（冲突越多越核心）
             MemoryManager mem = MemoryManager.getInstance();
-            List<ConflictDetector.ConflictPair> conflicts;
-            if (rawConflicts.size() > MKConfig.MOTIVATION_CONFLICT_MAX_PAIRS) {
-                Map<String, Integer> tokenCounts = matrix.getTokenCounts(
-                        rawConflicts.stream()
-                                .flatMap(c -> java.util.stream.Stream.of(c.tokenA(), c.tokenB()))
-                                .distinct()
-                                .toList());
-                MemoryManager.TokenOccurrenceStats occStats = mem.getTokenOccurrenceStats(
-                        MKConfig.MOTIVATION_CONFLICT_COOCCUR_SCAN_LIMIT);
-                conflicts = ConflictDetector.filterSignificant(
-                        rawConflicts, tokenCounts, occStats, MKConfig.MOTIVATION_CONFLICT_MAX_PAIRS);
-                log.info("[ActionLoop] 🎯 冲突过滤: {}→{}(top-{})",
-                        rawConflicts.size(), conflicts.size(), MKConfig.MOTIVATION_CONFLICT_MAX_PAIRS);
-            } else {
-                conflicts = rawConflicts;
-            }
-            MK65Debug.motivationQuery(dist, novelTokens, conflicts, overallVotes);
+            List<ConflictDetector.TokenConflict> conflictTokens = ConflictDetector.rankTokensByConflictDegree(
+                    rawConflicts, MKConfig.MOTIVATION_CONFLICT_MAX_PAIRS);
+            MK65Debug.motivationQuery(dist, novelTokens, conflictTokens, overallVotes);
 
             // ★ 等价token
             Map<String, Set<String>> equivalents = new HashMap<>();
@@ -267,17 +253,6 @@ public class ActionLoop {
             java.util.List<MemoryManager.ExpMatch> autoMemories = mem.autoRecall(inputTokens, MKConfig.MEMORY_AUTO_RECALL_TOPN);
             MK65Debug.autoMemories(autoMemories);
 
-            // ★ 对立组的历史解决方案
-            Map<String, java.util.List<MemoryManager.ExpMatch>> conflictResolutions = new HashMap<>();
-            if (!conflicts.isEmpty()) {
-                for (ConflictDetector.ConflictPair c : conflicts) {
-                    String pairKey = c.tokenA() + "|" + c.tokenB();
-                    java.util.List<MemoryManager.ExpMatch> resolutions = mem.findConflictResolutions(
-                            java.util.List.of(java.util.List.of(c.tokenA(), c.tokenB())));
-                    if (!resolutions.isEmpty()) conflictResolutions.put(pairKey, resolutions);
-                }
-            }
-
             boolean hasHistory = !dist.isEmpty() || !autoMemories.isEmpty();
 
             // ★ 行动池
@@ -285,14 +260,14 @@ public class ActionLoop {
             List<PrepareActionPool.ActionSummary> actionList = actionPool.getActionList();
 
             MotivationReport report = new MotivationReport(
-                    overallVotes, dist, conflicts, novelTokens, autoMemories,
-                    conflictResolutions, equivalents, actionList, hasHistory);
+                    overallVotes, dist, conflictTokens, novelTokens, autoMemories,
+                    equivalents, actionList, hasHistory);
 
             // ── 3. 构建 prompt ──
             String userMessage = buildUserMessage(input.actionText(), report);
-            log.info("[ActionLoop] 📏 Prompt: actionText={}chars, report={}chars, total={}chars | conflicts={}, exps={}, pool={}",
+            log.info("[ActionLoop] 📏 Prompt: actionText={}chars, report={}chars, total={}chars | conflictTokens={}, exps={}, pool={}",
                     input.actionText().length(), userMessage.length() - input.actionText().length() - 20,
-                    userMessage.length(), conflicts.size(), autoMemories.size(), actionList.size());
+                    userMessage.length(), conflictTokens.size(), autoMemories.size(), actionList.size());
             report.logComponentSizes();
             ArrayNode toolsArray = buildToolsArray();
 
@@ -397,7 +372,7 @@ public class ActionLoop {
                     .toList();
 
             // ★ 收集resolved_oppositions: 本轮检测到的对立token对
-            List<List<String>> resolvedOppositions = conflicts.stream()
+            List<List<String>> resolvedOppositions = rawConflicts.stream()
                     .map(c -> List.of(c.tokenA(), c.tokenB()))
                     .toList();
 

@@ -74,7 +74,7 @@ public class MK65Debug {
 
     public static void motivationQuery(Map<String, Map<String, Double>> dist,
                                         Set<String> novelTokens,
-                                        List<ConflictDetector.ConflictPair> conflicts,
+                                        List<ConflictDetector.TokenConflict> conflictTokens,
                                         Map<String, Double> overallVotes) {
         if (!enabled) return;
         log.info("╟─ 动机查询 ──────────────────────────────────────────────");
@@ -107,13 +107,15 @@ public class MK65Debug {
         // 新异token
         log.info("║ 新异token: {}", novelTokens.isEmpty() ? "(无)" : novelTokens);
 
-        // 冲突
-        log.info("║ 冲突检测:");
-        if (conflicts.isEmpty()) {
+        // 冲突token（度数排名）
+        log.info("║ 冲突Token（按冲突广度排序）:");
+        if (conflictTokens.isEmpty()) {
             log.info("║   (无冲突)");
         } else {
-            for (ConflictDetector.ConflictPair c : conflicts) {
-                log.info("║   [{}] vs [{}] — 冲突度 {:.2f}", c.tokenA(), c.tokenB(), c.conflictScore());
+            for (ConflictDetector.TokenConflict tc : conflictTokens) {
+                log.info("║   [{}] 冲突{}个: {}",
+                        tc.token(), tc.conflictCount(),
+                        String.join(", ", tc.conflictsWith()));
             }
         }
     }

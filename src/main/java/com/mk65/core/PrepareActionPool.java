@@ -139,6 +139,7 @@ public class PrepareActionPool {
 
     public void push(ActionInput input) {
         if (input == null) return;
+        evictExpired();
         pool.add(new PoolEntry(input, sequence.getAndIncrement(), currentRound));
     }
 
@@ -182,6 +183,7 @@ public class PrepareActionPool {
     // ═══════════════════════════════════════════
 
     public List<ActionSummary> getActionList() {
+        evictExpired();
         List<PoolEntry> entries = getAllEntries();
         List<ActionSummary> list = new ArrayList<>();
         for (int i = 0; i < entries.size(); i++) {
@@ -298,6 +300,21 @@ public class PrepareActionPool {
     // ═══════════════════════════════════════════
     // 内部
     // ═══════════════════════════════════════════
+
+    /** 清除超过 TTL 的过期 Action。在 push 和 getActionList 时触发。 */
+    private void evictExpired() {
+        long now = System.currentTimeMillis();
+        long ttlMs = MKConfig.POOL_ACTION_TTL_SEC * 1000;
+        int before = pool.size();
+
+        pool.removeIf(entry -> (now - entry.input.createdAt()) > ttlMs);
+
+        int removed = before - pool.size();
+        if (removed > 0) {
+            log.info("[Pool] 🧹 TTL淘汰: {}个过期Action已清除 (TTL={}s, 剩余{}个)",
+                    removed, MKConfig.POOL_ACTION_TTL_SEC, pool.size());
+        }
+    }
 
     private List<PoolEntry> getAllEntries() {
         List<PoolEntry> list = new ArrayList<>(pool);

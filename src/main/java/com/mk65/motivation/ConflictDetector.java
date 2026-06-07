@@ -151,6 +151,67 @@ public class ConflictDetector {
     ) {}
 
     /**
+     * Token 中心化的冲突信息。
+     * 一个 token 的全部冲突面 — 它和哪些其他 token 行动分布冲突。
+     */
+    public record TokenConflict(
+            String token,
+            List<String> conflictsWith,   // 与之冲突的其他 token 列表
+            int conflictCount,            // 冲突的 token 数量（度数）
+            double hubMultiplier          // 基础倍率 = conflictCount / maxConflictCount，最大hub=1.0
+    ) {}
+
+    /**
+     * 按 token 冲突广度（度数中心度）排名。
+     *
+     * 思路：不是按 pair 排序，而是按 token 聚合 —
+     * 一个 token 跟越多其他 token 冲突，它就越是一个核心矛盾点，越值得 LLM 优先关注。
+     * 不乘 reliability/coOccurBonus — 冲突多本身已经说明了重要性。
+     *
+     * @param rawConflicts detectConflicts() 的原始输出（已超阈值）
+     * @param maxTokens    最多保留多少个冲突 token（防止 prompt 爆炸）
+     * @return 按 conflictCount 降序排列的 token 列表
+     */
+    public static List<TokenConflict> rankTokensByConflictDegree(
+            List<ConflictPair> rawConflicts, int maxTokens) {
+
+        if (rawConflicts.isEmpty()) return List.of();
+
+        // 1. 按 token 聚合：token → 与之冲突的其他 token 集合
+        Map<String, Set<String>> conflictMap = new LinkedHashMap<>();
+        for (ConflictPair c : rawConflicts) {
+            conflictMap.computeIfAbsent(c.tokenA(), k -> new LinkedHashSet<>()).add(c.tokenB());
+            conflictMap.computeIfAbsent(c.tokenB(), k -> new LinkedHashSet<>()).add(c.tokenA());
+        }
+
+        // 2. 转为 TokenConflict 列表
+        List<TokenConflict> tokenConflicts = new ArrayList<>();
+        for (Map.Entry<String, Set<String>> e : conflictMap.entrySet()) {
+            List<String> conflictsWith = new ArrayList<>(e.getValue());
+            tokenConflicts.add(new TokenConflict(
+                    e.getKey(), conflictsWith, conflictsWith.size(), 0.0));
+        }
+
+        // 3. 按冲突数降序
+        tokenConflicts.sort((a, b) -> Integer.compare(b.conflictCount, a.conflictCount));
+
+        // 4. 截断 top-K token
+        if (tokenConflicts.size() > maxTokens) {
+            tokenConflicts = tokenConflicts.subList(0, maxTokens);
+        }
+
+        // 5. 计算 hub 倍率（最大 hub = 1.0）
+        int maxCount = tokenConflicts.get(0).conflictCount;
+        List<TokenConflict> result = new ArrayList<>();
+        for (TokenConflict tc : tokenConflicts) {
+            double multiplier = maxCount > 0 ? (double) tc.conflictCount / maxCount : 1.0;
+            result.add(new TokenConflict(tc.token, tc.conflictsWith, tc.conflictCount, multiplier));
+        }
+
+        return result;
+    }
+
+    /**
      * 找和指定token实践倾向最近的其他token（等价token）。
      * 基于coMatrix行向量的余弦相似度。
      */

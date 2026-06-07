@@ -6,6 +6,7 @@ import com.mk65.tokenizer.Tokenizer;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Process 编码器。
@@ -19,6 +20,11 @@ public class ProcessEncoder {
 
     private static final com.fasterxml.jackson.databind.ObjectMapper mapper =
             new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** 标识符类参数名 — 值不拆分，整体保留为一个 token */
+    private static final Set<String> ID_PARAMS = Set.of(
+            "source", "target", "path", "mode"
+    );
 
     /**
      * 编码一轮 LLM 的工具调用。
@@ -39,11 +45,19 @@ public class ProcessEncoder {
                     String key = fieldNames.next();
                     tokens.add("param:" + key);
 
-                    // ★ 参数值分词
                     com.fasterxml.jackson.databind.JsonNode val = args.get(key);
-                    List<String> valueTokens = extractValueTokens(val, tokenizer);
-                    for (String vt : valueTokens) {
-                        tokens.add("value:" + vt);
+                    if (ID_PARAMS.contains(key)) {
+                        // 标识符参数（source/target/path/mode）：整体保留，不拆分
+                        List<String> rawValues = extractRawValues(val);
+                        for (String rv : rawValues) {
+                            tokens.add("value:" + rv);
+                        }
+                    } else {
+                        // 内容参数：走 Jieba 分词
+                        List<String> valueTokens = extractValueTokens(val, tokenizer);
+                        for (String vt : valueTokens) {
+                            tokens.add("value:" + vt);
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -51,6 +65,26 @@ public class ProcessEncoder {
             }
         }
         return tokens;
+    }
+
+    /**
+     * 递归提取标识符类参数值，不拆分。
+     * 支持 string / array 两种 JSON 类型。
+     */
+    private static List<String> extractRawValues(
+            com.fasterxml.jackson.databind.JsonNode node) {
+        List<String> result = new ArrayList<>();
+        if (node == null || node.isNull()) return result;
+
+        if (node.isTextual()) {
+            String text = node.asText().trim().toLowerCase();
+            if (!text.isBlank()) result.add(text);
+        } else if (node.isArray()) {
+            for (com.fasterxml.jackson.databind.JsonNode item : node) {
+                result.addAll(extractRawValues(item));
+            }
+        }
+        return result;
     }
 
     /**

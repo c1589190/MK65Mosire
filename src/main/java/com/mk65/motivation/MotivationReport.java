@@ -13,10 +13,9 @@ public class MotivationReport {
 
     private final Map<String, Double> overallVotes;
     private final Map<String, Map<String, Double>> perTokenDistribution;
-    private final List<ConflictDetector.ConflictPair> conflicts;
+    private final List<ConflictDetector.TokenConflict> conflictTokens;
     private final Set<String> novelTokens;
     private final List<MemoryManager.ExpMatch> autoMemories;
-    private final Map<String, List<MemoryManager.ExpMatch>> conflictResolutions;
     private final Map<String, Set<String>> equivalentTokens;
     private final List<PrepareActionPool.ActionSummary> actionPoolList;
     private final boolean hasHistory;
@@ -24,19 +23,17 @@ public class MotivationReport {
     public MotivationReport(
             Map<String, Double> overallVotes,
             Map<String, Map<String, Double>> perTokenDistribution,
-            List<ConflictDetector.ConflictPair> conflicts,
+            List<ConflictDetector.TokenConflict> conflictTokens,
             Set<String> novelTokens,
             List<MemoryManager.ExpMatch> autoMemories,
-            Map<String, List<MemoryManager.ExpMatch>> conflictResolutions,
             Map<String, Set<String>> equivalentTokens,
             List<PrepareActionPool.ActionSummary> actionPoolList,
             boolean hasHistory) {
         this.overallVotes = overallVotes;
         this.perTokenDistribution = perTokenDistribution;
-        this.conflicts = conflicts != null ? conflicts : List.of();
+        this.conflictTokens = conflictTokens != null ? conflictTokens : List.of();
         this.novelTokens = novelTokens != null ? novelTokens : Set.of();
         this.autoMemories = autoMemories != null ? autoMemories : List.of();
-        this.conflictResolutions = conflictResolutions != null ? conflictResolutions : Map.of();
         this.equivalentTokens = equivalentTokens != null ? equivalentTokens : Map.of();
         this.actionPoolList = actionPoolList != null ? actionPoolList : List.of();
         this.hasHistory = hasHistory;
@@ -62,40 +59,17 @@ public class MotivationReport {
             sb.append("\n");
         }
 
-        // 2. 行动冲突 — LLM 要处理的核心矛盾（方案文本有总长度上限）
-        if (!conflicts.isEmpty()) {
-            int maxResolutionChars = com.mk65.config.MKConfig.MOTIVATION_CONFLICT_MAX_RESOLUTION_CHARS;
-            int resolutionCharsUsed = 0;
-            sb.append("⚠️ 行动冲突:\n");
-            for (ConflictDetector.ConflictPair c : conflicts) {
-                sb.append(String.format("  [%s] vs [%s] — 冲突度: %.2f\n", c.tokenA(), c.tokenB(), c.conflictScore()));
-                String pairKey = c.tokenA() + "|" + c.tokenB();
-                List<MemoryManager.ExpMatch> resolutions = conflictResolutions.getOrDefault(pairKey, List.of());
-                if (!resolutions.isEmpty()) {
-                    // 方案文本总长限幅：超过上限后只显示"还有N条略"
-                    if (resolutionCharsUsed >= maxResolutionChars) {
-                        sb.append(String.format("    (方案文本已达上限, 剩余%d条略)\n", resolutions.size()));
-                        continue;
-                    }
-                    sb.append(String.format("    历史方案 (%d条):\n", resolutions.size()));
-                    int shown = 0;
-                    for (MemoryManager.ExpMatch r : resolutions) {
-                        int wouldUse = resolutionCharsUsed + r.actionText().length();
-                        if (wouldUse > maxResolutionChars && shown > 0) {
-                            int remaining = resolutions.size() - shown;
-                            if (remaining > 0) {
-                                sb.append(String.format("      (方案文本截断, 剩余%d条略)\n", remaining));
-                            }
-                            resolutionCharsUsed = maxResolutionChars; // 标记已达上限
-                            break;
-                        }
-                        sb.append(String.format("      Exp#%d R%d: %s → %s\n", r.id(), r.roundNumber(),
-                                r.actionText(), r.toolNames().isEmpty() ? "(纯文本)" : String.join(",", r.toolNames())));
-                        resolutionCharsUsed = wouldUse;
-                        shown++;
-                    }
-                }
+        // 2. 冲突Token — 按冲突广度排名，LLM 需逐一分析后再行动
+        if (!conflictTokens.isEmpty()) {
+            sb.append("⚠️ 冲突Token（按冲突广度排序，越靠前越核心矛盾）:\n");
+            for (ConflictDetector.TokenConflict tc : conflictTokens) {
+                sb.append(String.format("  [%s] 冲突%d个: %s\n",
+                        tc.token(), tc.conflictCount(),
+                        String.join(", ", tc.conflictsWith())));
             }
+            sb.append("\n");
+            sb.append("★★★ 请在thoughts中逐一回答以上每个冲突Token在本轮输入中的具体含义与行动指向，");
+            sb.append("再综合判断本轮的矛盾处理策略。\n");
             sb.append("\n");
         }
 
@@ -138,17 +112,10 @@ public class MotivationReport {
         int votesSize = sb.length();
 
         int conflictsSize = 0;
-        int resolutionChars = 0;
-        if (!conflicts.isEmpty()) {
+        if (!conflictTokens.isEmpty()) {
             StringBuilder cs = new StringBuilder();
-            for (ConflictDetector.ConflictPair c : conflicts) {
-                cs.append(String.format("[%s]vs[%s]:%.2f ", c.tokenA(), c.tokenB(), c.conflictScore()));
-                String pairKey = c.tokenA() + "|" + c.tokenB();
-                List<MemoryManager.ExpMatch> resolutions = conflictResolutions.getOrDefault(pairKey, List.of());
-                cs.append(String.format("(方案%d条) ", resolutions.size()));
-                for (MemoryManager.ExpMatch r : resolutions) {
-                    resolutionChars += r.actionText().length();
-                }
+            for (ConflictDetector.TokenConflict tc : conflictTokens) {
+                cs.append(String.format("[%s]×%d ", tc.token(), tc.conflictCount()));
             }
             conflictsSize = cs.length();
         }
@@ -167,16 +134,16 @@ public class MotivationReport {
         int eqSize = equivalentTokens.size();
         int novelSize = novelTokens.size();
 
-        log.info("[Report] 📏 组件尺寸: votes={}chars, conflicts={}chars(方案内容{}chars), exps={}chars(total{}条), pool={}条 | "
+        log.info("[Report] 📏 组件尺寸: votes={}chars, conflicts={}chars, exps={}chars(total{}条), pool={}条 | "
                 + "仅计算未注入: distTokens={}, equivs={}, novels={}",
-                votesSize, conflictsSize, resolutionChars, expSize, autoMemories.size(), poolSize,
+                votesSize, conflictsSize, expSize, autoMemories.size(), poolSize,
                 distTokens, eqSize, novelSize);
     }
 
     // getters
     public Map<String, Double> getOverallVotes() { return overallVotes; }
     public Map<String, Map<String, Double>> getPerTokenDist() { return perTokenDistribution; }
-    public List<ConflictDetector.ConflictPair> getConflicts() { return conflicts; }
+    public List<ConflictDetector.TokenConflict> getConflictTokens() { return conflictTokens; }
     public Set<String> getNovelTokens() { return novelTokens; }
     public List<MemoryManager.ExpMatch> getAutoMemories() { return autoMemories; }
     public boolean hasHistory() { return hasHistory; }
