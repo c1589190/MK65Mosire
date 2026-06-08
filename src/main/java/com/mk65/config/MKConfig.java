@@ -38,6 +38,10 @@ public class MKConfig {
     public static int NAPCAT_WS_PORT = 3001;
     public static String NAPCAT_HTTP_URL = "http://127.0.0.1:3000";
     public static String NAPCAT_TOKEN = "";
+    /** WebSocket 专用 token（为空则回退到 napcat.token） */
+    public static String NAPCAT_WS_TOKEN = "";
+    /** HTTP API 专用 token（为空则回退到 napcat.token） */
+    public static String NAPCAT_HTTP_TOKEN = "";
 
     // ========== 搜索 ==========
     public static String SEARCH_BRAVE_API_KEY = "";
@@ -182,6 +186,11 @@ public class MKConfig {
         NAPCAT_WS_PORT = getInt(props, "napcat.wsPort", NAPCAT_WS_PORT);
         NAPCAT_HTTP_URL = get(props, "napcat.httpUrl", NAPCAT_HTTP_URL);
         NAPCAT_TOKEN = get(props, "napcat.token", NAPCAT_TOKEN);
+        NAPCAT_WS_TOKEN = get(props, "napcat.wsToken", "");
+        NAPCAT_HTTP_TOKEN = get(props, "napcat.httpToken", "");
+        // ★ 回退：独立 token 为空时使用 napcat.token
+        if (NAPCAT_WS_TOKEN.isBlank()) NAPCAT_WS_TOKEN = NAPCAT_TOKEN;
+        if (NAPCAT_HTTP_TOKEN.isBlank()) NAPCAT_HTTP_TOKEN = NAPCAT_TOKEN;
 
         SEARCH_BRAVE_API_KEY = get(props, "search.braveApiKey", SEARCH_BRAVE_API_KEY);
         SEARCH_METASO_API_KEY = get(props, "search.metasoApiKey", SEARCH_METASO_API_KEY);
@@ -361,8 +370,14 @@ public class MKConfig {
                 "NapcatQQ 适配器", "HTTP API 地址",
                 "http://127.0.0.1:3000", NAPCAT_HTTP_URL));
         registry.add(entry("napcat.token",
-                "NapcatQQ 适配器", "Napcat 访问令牌",
+                "NapcatQQ 适配器", "Napcat 访问令牌 (WS和HTTP共用回退值)",
                 "", NAPCAT_TOKEN));
+        registry.add(entry("napcat.wsToken",
+                "NapcatQQ 适配器", "WebSocket 专用令牌 (为空则回退到 napcat.token)",
+                "(回退到napcat.token)", nullableStr(NAPCAT_WS_TOKEN)));
+        registry.add(entry("napcat.httpToken",
+                "NapcatQQ 适配器", "HTTP API 专用令牌 (为空则回退到 napcat.token)",
+                "(回退到napcat.token)", nullableStr(NAPCAT_HTTP_TOKEN)));
 
         // 搜索
         registry.add(entry("search.braveApiKey",

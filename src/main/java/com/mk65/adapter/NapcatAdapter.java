@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
@@ -36,7 +37,18 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
 
     private BiConsumer<String, String> messageCallback;
     private volatile boolean connected = false;
+    private volatile boolean shouldReconnect = true;
+    private volatile boolean reconnecting = false;
+    private volatile boolean reconnectScheduled = false;
+    private int reconnectAttempts = 0;
+    private long connectedSince = 0; // epoch millis, 用于判断稳定连接
     private String selfId = "";
+
+    private static final int HEARTBEAT_INTERVAL_SEC = 30;
+    private static final int INITIAL_RECONNECT_DELAY_SEC = 5;
+    private static final int MAX_RECONNECT_BACKOFF_SEC = 300;
+    /** 连接需要稳定保持多少秒才重置重连计数 (防止 Napcat 秒关导致退避永不增长) */
+    private static final int MIN_STABLE_CONNECT_SEC = 10;
 
     /** 图片消息异步处理器：单线程保证消息顺序，不阻塞 WebSocket */
     private final ExecutorService imageProcessor = Executors.newSingleThreadExecutor(r -> {
@@ -45,40 +57,60 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
         return t;
     });
 
+    /** 心跳 + 重连调度器 */
+    private final ScheduledExecutorService keepAliveScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "napcat-keepalive");
+        t.setDaemon(true);
+        return t;
+    });
+
     public NapcatAdapter() throws URISyntaxException {
-        super(buildWsUri(), buildHeaders(MKConfig.NAPCAT_TOKEN));
+        super(buildWsUri(), buildHeaders(MKConfig.NAPCAT_WS_TOKEN));
         this.httpBase = MKConfig.NAPCAT_HTTP_URL;
-        this.token = MKConfig.NAPCAT_TOKEN;
+        this.token = MKConfig.NAPCAT_HTTP_TOKEN;  // HTTP 专用 token
 
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(5, TimeUnit.SECONDS)
                 .readTimeout(15, TimeUnit.SECONDS)
                 .build();
 
-        this.setConnectionLostTimeout(60);
+        // ★ 禁用库内置 connectionLostChecker，改用自主心跳 ping 维持连接
+        this.setConnectionLostTimeout(0);
     }
 
     @Override
     public void start() {
+        // ★ 启动心跳 ping：每 30s 发送一次，防止 Napcat 因空闲断开连接
+        keepAliveScheduler.scheduleAtFixedRate(
+                this::sendHeartbeat,
+                HEARTBEAT_INTERVAL_SEC, HEARTBEAT_INTERVAL_SEC, TimeUnit.SECONDS);
+
         try {
             connectBlocking();
             connected = true;
+            connectedSince = System.currentTimeMillis();
+            reconnectScheduled = false;
             fetchSelfId();
             log.info("[Napcat] ✅ 已连接: ws={}:{} http={}",
                     MKConfig.NAPCAT_WS_URL, MKConfig.NAPCAT_WS_PORT, httpBase);
         } catch (InterruptedException e) {
             connected = false;
-            log.warn("[Napcat] 连接被中断, 将以纯控制台模式运行");
+            log.warn("[Napcat] 连接被中断, 将自动重连...");
             Thread.currentThread().interrupt();
+            scheduleReconnect();
         } catch (Exception e) {
             connected = false;
-            log.warn("[Napcat] 连接失败 ({}), 将以纯控制台模式运行", e.getMessage());
+            log.warn("[Napcat] 连接失败 ({}), 将自动重连...", e.getMessage());
+            scheduleReconnect();
         }
     }
 
     @Override
     public void stop() {
+        shouldReconnect = false;
+        keepAliveScheduler.shutdown();
         try { closeBlocking(); } catch (Exception ignored) {}
+        log.info("[Napcat] ⏹️ 适配器已停止");
     }
 
     @Override
@@ -106,7 +138,9 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
     @Override
     public void onOpen(ServerHandshake handshake) {
         connected = true;
-        log.info("[Napcat] WebSocket 链路已建立");
+        connectedSince = System.currentTimeMillis();
+        reconnecting = false;
+        log.info("[Napcat] ✅ WebSocket 链路已建立");
     }
 
     @Override
@@ -230,17 +264,22 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
     @Override
     public void onClose(int code, String reason, boolean remote) {
         connected = false;
-        log.warn("[Napcat] WS连接关闭: code={}, reason={}, remote={}", code, reason, remote);
+        log.warn("[Napcat] 🔌 WS连接关闭: code={}, reason={}, remote={}", code, reason, remote);
+        scheduleReconnect();
     }
 
     @Override
     public void onError(Exception ex) {
         if (ex instanceof java.net.ConnectException) {
-            log.warn("[Napcat] 无法连接 ({}), 纯控制台模式", ex.getMessage());
+            log.warn("[Napcat] 无法连接: {}", ex.getMessage());
         } else {
             log.error("[Napcat] WS错误", ex);
         }
-        connected = false;
+        // ★ 仅在连接已断开时触发重连；瞬态错误不误杀存活连接
+        if (!isOpen()) {
+            connected = false;
+            scheduleReconnect();
+        }
     }
 
     // ── HTTP 辅助 ──
@@ -492,6 +531,76 @@ public class NapcatAdapter extends WebSocketClient implements Adapter {
             return sb.toString();
         }
         return messageNode.asText("");
+    }
+
+    // ═══════════════════════════════════════════
+    // 心跳 + 自动重连
+    // ═══════════════════════════════════════════
+
+    /** 心跳 ping：每30s发送一次，防止 Napcat 因空闲断开连接 */
+    private void sendHeartbeat() {
+        if (!isOpen()) return;
+        try {
+            sendPing();
+            log.debug("[Napcat] 💓 心跳 ping 已发送");
+        } catch (Exception e) {
+            log.debug("[Napcat] 心跳 ping 发送失败: {}", e.getMessage());
+        }
+    }
+
+    /** 调度重连（指数退避），由 onClose/onError/start 失败时调用 */
+    private void scheduleReconnect() {
+        if (!shouldReconnect || reconnecting) return;
+        // ★ 防重复调度：同一时刻只允许一个待执行的重连任务
+        if (reconnectScheduled) return;
+        reconnectScheduled = true;
+
+        // ★ 稳定连接判定：如果之前连接保持了足够长时间，重置退避计数
+        if (connectedSince > 0) {
+            long stableMs = System.currentTimeMillis() - connectedSince;
+            if (stableMs >= MIN_STABLE_CONNECT_SEC * 1000L) {
+                reconnectAttempts = 0;
+                log.debug("[Napcat] 连接已稳定{}秒，重置退避计数", stableMs / 1000);
+            }
+        }
+        connectedSince = 0;
+
+        int shift = Math.min(reconnectAttempts, 6);
+        int delaySec = Math.min(INITIAL_RECONNECT_DELAY_SEC * (1 << shift), MAX_RECONNECT_BACKOFF_SEC);
+        reconnectAttempts++;
+        log.info("[Napcat] 🔄 将在{}秒后重连 (第{}次)", delaySec, reconnectAttempts);
+        keepAliveScheduler.schedule(this::doReconnect, delaySec, TimeUnit.SECONDS);
+    }
+
+    /** 执行重连 */
+    private void doReconnect() {
+        reconnectScheduled = false;
+        if (!shouldReconnect) return;
+        if (isOpen()) {
+            reconnecting = false;
+            return; // 已经连接（可能被心跳或 onOpen 抢先）
+        }
+        reconnecting = true;
+        try {
+            log.info("[Napcat] 🔄 正在重连... (第{}次)", reconnectAttempts);
+            reconnectBlocking();
+            // onOpen 回调会设置 connected=true, reconnecting=false, connectedSince
+            fetchSelfId();
+
+            // ★ 验证连接是否仍存活（Napcat 可能在 onOpen 后立即关闭）
+            if (isOpen()) {
+                log.info("[Napcat] ✅ 重连成功 (第{}次)", reconnectAttempts);
+            } else {
+                log.warn("[Napcat] ⚠️ 重连后连接已断开，将再次重连");
+                reconnecting = false;
+                scheduleReconnect();
+            }
+        } catch (Exception e) {
+            log.warn("[Napcat] ❌ 重连失败 (第{}次): {}", reconnectAttempts, e.getMessage());
+            reconnecting = false;
+            reconnectScheduled = false;
+            scheduleReconnect();
+        }
     }
 
     private static URI buildWsUri() throws URISyntaxException {

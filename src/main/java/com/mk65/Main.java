@@ -54,7 +54,12 @@ public class Main {
             napcat.wsUrl=127.0.0.1
             napcat.wsPort=3001
             napcat.httpUrl=http://127.0.0.1:3000
+            # WS和HTTP共用token（如果独立token为空则回退到此值）
             napcat.token=
+            # WS独立token（为空则使用 napcat.token）
+            napcat.wsToken=
+            # HTTP独立token（为空则使用 napcat.token）
+            napcat.httpToken=
 
             # ---------- 搜索 ----------
             search.braveApiKey=
@@ -156,21 +161,21 @@ public class Main {
         ActionLoop loop = ActionLoop.getInstance();
 
         // 2. 尝试启动 NapcatQQ
-        if (MKConfig.NAPCAT_TOKEN != null && !MKConfig.NAPCAT_TOKEN.isBlank()
+        boolean hasAnyNapcatToken = (MKConfig.NAPCAT_WS_TOKEN != null && !MKConfig.NAPCAT_WS_TOKEN.isBlank())
+                || (MKConfig.NAPCAT_HTTP_TOKEN != null && !MKConfig.NAPCAT_HTTP_TOKEN.isBlank());
+        if (hasAnyNapcatToken
                 || MKConfig.NAPCAT_WS_URL != null && !MKConfig.NAPCAT_WS_URL.isBlank()) {
             try {
                 napcat = new NapcatAdapter();
                 napcat.setMessageCallback((source, text) ->
                         loop.getActionPool().pushExternal(source, text));
-                try {
-                    napcat.start();
-                    SendMessage.setNapcat(napcat);
-                    com.mk65.tool.GetChatHistory.setNapcat(napcat);
-                    log.info("[Main] NapcatQQ 适配器已启动");
-                } catch (Exception e) {
-                    log.warn("[Main] NapcatQQ 连接失败 ({}), 纯控制台模式运行", e.getMessage());
-                    napcat = null;
-                }
+                // ★ 始终注册工具（HTTP API 在 WS 断开时仍可用于发消息）
+                SendMessage.setNapcat(napcat);
+                com.mk65.tool.GetChatHistory.setNapcat(napcat);
+                // start() 内部失败会自动进入重连循环，不抛异常
+                napcat.start();
+                log.info("[Main] NapcatQQ 适配器已启动 (WS状态={})",
+                        napcat.isConnected() ? "已连接" : "等待重连");
             } catch (URISyntaxException e) {
                 log.error("[Main] NapcatQQ URL 配置错误，将以纯控制台模式运行", e);
             } catch (Exception e) {
