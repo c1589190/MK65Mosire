@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mk65.config.MKConfig;
+import com.mk65.core.MK65Debug;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 
@@ -15,8 +16,9 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * OpenAI 兼容 API 调用封装。
- * 维护全局消息列表，利用 API 层 prompt 前缀缓存提高命中率。
+ * LLM 调用封装，支持 OpenAI 兼容 API 和 Anthropic Messages API 双协议。
+ * 通过 llm.brain.protocol 配置切换 (openai | anthropic)。
+ * 内部始终以 OpenAI 格式维护全局消息列表，在 API 边界做协议转换。
  *
  * 缓存策略：条目数或总大小超阈值时，清空全部缓存，
  * 将最后30%内容压缩为文本摘要，拼接到下一轮首个user消息前面。
@@ -27,13 +29,17 @@ public class LLMAdapter {
     private static final ObjectMapper mapper = new ObjectMapper();
     private final OkHttpClient client;
 
+    private final String protocol;
     private final String apiBase;
     private final String apiKey;
     private final String model;
     private final double temperature;
     private final int maxTokens;
 
-    /** 全局消息列表 — system + 最近N轮对话 */
+    /** Anthropic API 版本头 (仅 Anthropic 协议) */
+    private static final String ANTHROPIC_VERSION = "2023-06-01";
+
+    /** 全局消息列表 — system + 最近N轮对话 (内部始终以 OpenAI 格式存储) */
     private final List<JsonNode> globalMessages = new ArrayList<>();
     private String systemPromptText = "";
 
@@ -50,6 +56,7 @@ public class LLMAdapter {
     private static final int TOKEN_LIMIT_CHARS = 800_000;
 
     public LLMAdapter() {
+        this.protocol = MKConfig.BRAIN_PROTOCOL;
         this.apiBase = MKConfig.BRAIN_API_BASE;
         this.apiKey = MKConfig.BRAIN_API_KEY;
         this.model = MKConfig.BRAIN_CHAT_MODEL;
@@ -61,6 +68,8 @@ public class LLMAdapter {
                 .readTimeout(MKConfig.CORE_ROUND_TIMEOUT_SEC, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .build();
+
+        log.info("[LLM] 初始化: protocol={}, model={}, apiBase={}", protocol, model, apiBase);
     }
 
     /**
@@ -115,7 +124,7 @@ public class LLMAdapter {
         globalMessages.add(userMsg);
 
         // 4. 构建请求体
-        ObjectNode body = buildRequestBody(tools);
+        ObjectNode body = isAnthropic() ? buildAnthropicRequestBody(tools) : buildRequestBody(tools);
 
         // ★ 5. 紧急保护：请求体过大时强制重置
         if (body.toString().length() > TOKEN_LIMIT_CHARS) {
@@ -134,7 +143,7 @@ public class LLMAdapter {
             // 摘要重置后缓存只剩 system，再次确保无重复user
             repairTopUserDuplicate();
             globalMessages.add(userMsg);
-            body = buildRequestBody(tools);
+            body = isAnthropic() ? buildAnthropicRequestBody(tools) : buildRequestBody(tools);
         }
 
         // 6. 验证消息序列合法性（兜底：非法时外科修复，不清空全缓存）
@@ -154,7 +163,7 @@ public class LLMAdapter {
                 globalMessages.add(sys);
                 globalMessages.add(userMsg);
             }
-            body = buildRequestBody(tools);
+            body = isAnthropic() ? buildAnthropicRequestBody(tools) : buildRequestBody(tools);
         }
 
         // 7. 计算请求体大小和消息概要
@@ -183,7 +192,13 @@ public class LLMAdapter {
         long startMs = System.currentTimeMillis();
 
         try {
-            String fullUrl = apiBase + (apiBase.endsWith("/") ? "" : "/") + "chat/completions";
+            // ★ 根据协议选择 URL 路径和认证头
+            String fullUrl;
+            if (isAnthropic()) {
+                fullUrl = buildAnthropicUrl(apiBase);
+            } else {
+                fullUrl = apiBase + (apiBase.endsWith("/") ? "" : "/") + "chat/completions";
+            }
             RequestBody reqBody = RequestBody.create(
                     MediaType.parse("application/json"), bodyStr);
             Request.Builder reqBuilder = new Request.Builder()
@@ -191,7 +206,18 @@ public class LLMAdapter {
                     .post(reqBody)
                     .addHeader("Content-Type", "application/json");
             if (apiKey != null && !apiKey.isBlank()) {
-                reqBuilder.addHeader("Authorization", "Bearer " + apiKey);
+                if (isAnthropic()) {
+                    reqBuilder.addHeader("x-api-key", apiKey);
+                    reqBuilder.addHeader("anthropic-version", ANTHROPIC_VERSION);
+                } else {
+                    reqBuilder.addHeader("Authorization", "Bearer " + apiKey);
+                }
+            }
+
+            // ★ Debug: 打印完整请求体 (/debug 命令控制)
+            if (MK65Debug.isEnabled()) {
+                log.info("[LLM] 📤 请求体原文 ({}chars):\n{}", bodyStr.length(),
+                        bodyStr.length() > 8000 ? bodyStr.substring(0, 8000) + "...[截断]" : bodyStr);
             }
 
             try (Response resp = client.newCall(reqBuilder.build()).execute()) {
@@ -214,8 +240,13 @@ public class LLMAdapter {
                 log.info("[LLM] 📥 响应 {}ms | body={}KB | HTTP {}",
                         elapsed, String.format("%.1f", respStr.getBytes(StandardCharsets.UTF_8).length / 1024.0),
                         resp.code());
+                // ★ Debug: 打印完整响应体 (/debug 命令控制)
+                if (MK65Debug.isEnabled()) {
+                    log.info("[LLM] 📥 响应原文 ({}chars):\n{}", respStr.length(),
+                            respStr.length() > 8000 ? respStr.substring(0, 8000) + "...[截断]" : respStr);
+                }
                 JsonNode root = mapper.readTree(respStr);
-                return parseAndCache(root, elapsed);
+                return isAnthropic() ? parseAnthropicResponse(root, elapsed) : parseAndCache(root, elapsed);
             }
         } catch (Exception e) {
             long elapsed = System.currentTimeMillis() - startMs;
@@ -507,6 +538,251 @@ public class LLMAdapter {
         }
 
         return body;
+    }
+
+    // ==========================================
+    // Anthropic 协议
+    // ==========================================
+
+    private boolean isAnthropic() {
+        return "anthropic".equalsIgnoreCase(protocol);
+    }
+
+    /** 构建 Anthropic API URL */
+    private String buildAnthropicUrl(String base) {
+        // 如果 apiBase 已包含 /v1 (常见代理模式)，直接拼 /messages
+        // 否则按 Anthropic 官方路径 /v1/messages
+        if (base.endsWith("/v1") || base.endsWith("/v1/")) {
+            return base + (base.endsWith("/") ? "" : "/") + "messages";
+        }
+        return base + (base.endsWith("/") ? "" : "/") + "v1/messages";
+    }
+
+    /**
+     * 构建 Anthropic Messages API 请求体。
+     * 将内部 OpenAI 格式的 globalMessages 转换为 Anthropic 格式。
+     */
+    private ObjectNode buildAnthropicRequestBody(ArrayNode tools) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("model", model);
+        body.put("temperature", temperature);
+        body.put("max_tokens", maxTokens);
+        body.put("stream", false);
+
+        // ★ 提取 system prompt (Anthropic 的 system 是顶层字段)
+        int startIdx = 0;
+        if (!globalMessages.isEmpty() && "system".equals(globalMessages.get(0).path("role").asText(""))) {
+            body.put("system", globalMessages.get(0).path("content").asText(""));
+            startIdx = 1;
+        }
+
+        // ★ 转换消息: OpenAI roles → Anthropic roles
+        ArrayNode messages = body.putArray("messages");
+        int i = startIdx;
+        while (i < globalMessages.size()) {
+            JsonNode msg = globalMessages.get(i);
+            String role = msg.path("role").asText("");
+
+            if ("user".equals(role)) {
+                ObjectNode userMsg = mapper.createObjectNode();
+                userMsg.put("role", "user");
+                // Anthropic user content 可以是纯字符串（无 tool_result 时）
+                String content = msg.path("content").asText("");
+                userMsg.put("content", content);
+                messages.add(userMsg);
+                i++;
+            } else if ("assistant".equals(role)) {
+                ObjectNode asstMsg = mapper.createObjectNode();
+                asstMsg.put("role", "assistant");
+                ArrayNode blocks = asstMsg.putArray("content");
+
+                String text = msg.path("content").asText("");
+                if (!text.isBlank()) {
+                    ObjectNode textBlock = blocks.addObject();
+                    textBlock.put("type", "text");
+                    textBlock.put("text", text);
+                }
+
+                JsonNode toolCalls = msg.path("tool_calls");
+                if (toolCalls.isArray()) {
+                    for (JsonNode tc : toolCalls) {
+                        ObjectNode toolUse = blocks.addObject();
+                        toolUse.put("type", "tool_use");
+                        toolUse.put("id", tc.path("id").asText(""));
+                        toolUse.put("name", tc.path("function").path("name").asText(""));
+                        String argsStr = tc.path("function").path("arguments").asText("");
+                        try {
+                            toolUse.set("input", mapper.readTree(argsStr));
+                        } catch (Exception e) {
+                            toolUse.putObject("input");
+                        }
+                    }
+                }
+
+                // Anthropic 要求 content 至少有一个 block
+                if (blocks.size() == 0) {
+                    ObjectNode textBlock = blocks.addObject();
+                    textBlock.put("type", "text");
+                    textBlock.put("text", "");
+                }
+                messages.add(asstMsg);
+                i++;
+            } else if ("tool".equals(role)) {
+                // ★ 将连续的 tool 消息合并为一个 user 消息 (Anthropic 要求)
+                ObjectNode userMsg = mapper.createObjectNode();
+                userMsg.put("role", "user");
+                ArrayNode blocks = userMsg.putArray("content");
+
+                while (i < globalMessages.size() && "tool".equals(globalMessages.get(i).path("role").asText(""))) {
+                    JsonNode toolMsg = globalMessages.get(i);
+                    ObjectNode toolResult = blocks.addObject();
+                    toolResult.put("type", "tool_result");
+                    toolResult.put("tool_use_id", toolMsg.path("tool_call_id").asText(""));
+                    String name = toolMsg.path("name").asText("");
+                    if (!name.isBlank()) {
+                        toolResult.put("name", name);
+                    }
+                    toolResult.put("content", toolMsg.path("content").asText(""));
+                    i++;
+                }
+
+                messages.add(userMsg);
+            } else {
+                i++; // 跳过未知 role
+            }
+        }
+
+        // ★ 转换工具定义: OpenAI function.parameters → Anthropic input_schema
+        if (tools != null && tools.size() > 0) {
+            ArrayNode anthropicTools = body.putArray("tools");
+            for (JsonNode tool : tools) {
+                ObjectNode at = anthropicTools.addObject();
+                at.put("name", tool.path("function").path("name").asText(""));
+                at.put("description", tool.path("function").path("description").asText(""));
+                JsonNode params = tool.path("function").path("parameters");
+                if (params.isObject() && params.size() > 0) {
+                    at.set("input_schema", params);
+                } else {
+                    at.putObject("input_schema")
+                            .put("type", "object")
+                            .putObject("properties");
+                }
+            }
+            ObjectNode toolChoice = mapper.createObjectNode();
+            toolChoice.put("type", "auto");
+            body.set("tool_choice", toolChoice);
+        }
+
+        // ★ 后处理：合并连续同 role 消息（Anthropic 要求 user/assistant 严格交替）
+        // 典型场景：tool_results(user) 后紧跟下一轮的新 user 消息 → 需要合并
+        ArrayNode merged = mergeConsecutiveSameRole(messages);
+        body.set("messages", merged);
+
+        return body;
+    }
+
+    /**
+     * 合并连续同 role 消息，确保 Anthropic 要求的 user/assistant 严格交替。
+     * 两个连续 user 消息：字符串内容拼接；content blocks 数组合并。
+     */
+    private ArrayNode mergeConsecutiveSameRole(ArrayNode messages) {
+        ArrayNode result = mapper.createArrayNode();
+        for (int j = 0; j < messages.size(); j++) {
+            ObjectNode curr = (ObjectNode) messages.get(j);
+            String currRole = curr.path("role").asText("");
+
+            if (result.size() > 0) {
+                ObjectNode prev = (ObjectNode) result.get(result.size() - 1);
+                String prevRole = prev.path("role").asText("");
+
+                if (currRole.equals(prevRole)) {
+                    // 合并 curr 到 prev
+                    JsonNode prevC = prev.path("content");
+                    JsonNode currC = curr.path("content");
+
+                    if (prevC.isTextual() && currC.isTextual()) {
+                        prev.put("content", prevC.asText() + "\n\n" + currC.asText());
+                    } else {
+                        // 至少一个是 content blocks 数组
+                        ArrayNode blocks = mapper.createArrayNode();
+                        appendContentBlocks(prevC, blocks);
+                        appendContentBlocks(currC, blocks);
+                        prev.set("content", blocks);
+                    }
+                    continue; // 跳过 curr，已合并
+                }
+            }
+            result.add(curr);
+        }
+        return result;
+    }
+
+    /** 将字符串或 content block 数组追加到目标数组 */
+    private void appendContentBlocks(JsonNode content, ArrayNode target) {
+        if (content.isTextual()) {
+            ObjectNode block = target.addObject();
+            block.put("type", "text");
+            block.put("text", content.asText());
+        } else if (content.isArray()) {
+            target.addAll((ArrayNode) content);
+        }
+    }
+
+    /**
+     * 解析 Anthropic Messages API 响应，转换为内部 OpenAI 格式。
+     */
+    private LLMResult parseAnthropicResponse(JsonNode root, long elapsedMs) {
+        // 检查 Anthropic 错误响应
+        if (root.has("error")) {
+            JsonNode err = root.path("error");
+            String errMsg = err.path("message").asText("Anthropic error");
+            if (!globalMessages.isEmpty()
+                    && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
+                globalMessages.remove(globalMessages.size() - 1);
+            }
+            log.error("[LLM] ❌ Anthropic 错误: {}", errMsg);
+            return LLMResult.error("Anthropic: " + errMsg, elapsedMs);
+        }
+
+        JsonNode contentArray = root.path("content");
+        if (!contentArray.isArray() || contentArray.isEmpty()) {
+            if (!globalMessages.isEmpty()
+                    && "user".equals(globalMessages.get(globalMessages.size() - 1).path("role").asText(""))) {
+                globalMessages.remove(globalMessages.size() - 1);
+            }
+            return LLMResult.error("Anthropic 返回空 content", elapsedMs);
+        }
+
+        StringBuilder textBuf = new StringBuilder();
+        List<ToolCall> tcList = new ArrayList<>();
+
+        for (JsonNode block : contentArray) {
+            String type = block.path("type").asText("");
+            if ("text".equals(type)) {
+                textBuf.append(block.path("text").asText(""));
+            } else if ("tool_use".equals(type)) {
+                String id = block.path("id").asText("");
+                String name = block.path("name").asText("");
+                JsonNode input = block.path("input");
+                String args = input.isObject() ? input.toString() : "{}";
+                tcList.add(new ToolCall(id, name, args));
+            }
+        }
+
+        String content = textBuf.toString();
+
+        if (!tcList.isEmpty()) {
+            log.info("[LLM] Anthropic 响应 ({}ms): {}个工具调用, content={}chars, messages={}",
+                    elapsedMs, tcList.size(), content.length(), globalMessages.size());
+        } else {
+            log.info("[LLM] Anthropic 响应 ({}ms): 纯文本, content={}chars, messages={}",
+                    elapsedMs, content.length(), globalMessages.size());
+        }
+
+        // 以 OpenAI 格式缓存 assistant 消息
+        appendAssistantMessage(content, tcList);
+
+        return new LLMResult(content, tcList, elapsedMs, false);
     }
 
     // ==========================================

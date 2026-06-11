@@ -13,13 +13,15 @@ import java.util.Properties;
 public class MKConfig {
 
     // ========== LLM ==========
+    /** LLM 协议: openai (OpenAI兼容API) 或 anthropic (Anthropic Messages API) */
+    public static String BRAIN_PROTOCOL = "openai";
     public static String BRAIN_API_BASE = "http://127.0.0.1:3000/v1";
     public static String BRAIN_API_KEY = "";
     public static String BRAIN_CHAT_MODEL = "deepseek-v4-flash-max";
     public static double BRAIN_TEMPERATURE = 0.6;
     public static int BRAIN_MAX_TOKENS = 65535;
     public static boolean BRAIN_STREAM = true;
-    /** 是否启用思维链 (DeepSeek thinking/reasoning) */
+    /** 是否启用思维链 (仅 OpenAI 协议有效, DeepSeek thinking/reasoning) */
     public static boolean BRAIN_THINKING_ENABLED = false;
     /** 思维链预算 token 数 (仅在启用时生效, 0=不限制) */
     public static int BRAIN_THINKING_BUDGET_TOKENS = 2048;
@@ -162,6 +164,7 @@ public class MKConfig {
         }
 
         // 4. 赋值静态字段
+        BRAIN_PROTOCOL = get(props, "llm.brain.protocol", BRAIN_PROTOCOL);
         BRAIN_API_BASE = get(props, "llm.brain.apiBase", BRAIN_API_BASE);
         BRAIN_API_KEY = get(props, "llm.brain.apiKey", BRAIN_API_KEY);
         BRAIN_CHAT_MODEL = get(props, "llm.brain.chatModel", BRAIN_CHAT_MODEL);
@@ -311,8 +314,11 @@ public class MKConfig {
         java.util.List<ConfigEntry> registry = new java.util.ArrayList<>();
 
         // LLM 大脑模型
+        registry.add(entry("llm.brain.protocol",
+                "LLM 大脑模型", "LLM 协议: openai (OpenAI兼容/v1/chat/completions) 或 anthropic (Anthropic/v1/messages)",
+                "openai", BRAIN_PROTOCOL));
         registry.add(entry("llm.brain.apiBase",
-                "LLM 大脑模型", "LLM API 地址 (OpenAI 兼容)",
+                "LLM 大脑模型", "LLM API 地址 (OpenAI 兼容 或 Anthropic 兼容)",
                 "http://127.0.0.1:3000/v1", BRAIN_API_BASE));
         registry.add(entry("llm.brain.apiKey",
                 "LLM 大脑模型", "LLM API 密钥 (支持 SILICONFLOW_API_KEY 环境变量)",
